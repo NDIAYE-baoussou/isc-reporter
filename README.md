@@ -149,6 +149,14 @@ mapped, missing transforms, lifecycle state copied as is, identical mappings, ot
 `--from` reads a profile, a list of profiles or a configuration export, with transforms found in
 the same files.
 
+For every identity attribute the report also shows where else it is used, in the *Also used in*
+column of each profile sheet and in two sheets: *Attribute usage* (one line per attribute: the
+profiles that map it, the mappings and named transforms that read it, the source provisioning
+policies that use it, and which sources) and *Usage detail* (one line per use). Provisioning
+policies are read from every source of the tenant (this needs `idn:provisioning-policy:read` and
+sources read access; a source that cannot be read is skipped with a warning), or from a source
+export given to `--from`. Identity attributes used in rules (code) cannot be detected.
+
 ### Source migration analysis
 
 ![Source migration](docs/images/migration.png)

@@ -106,7 +106,8 @@ def test_workbook_sheets_and_summary(tmp_path):
                                         origin="tenant") == 2
     book = load_workbook(path)
     assert book.sheetnames == ["Dashboard", "Profiles", "IP_HR_test", "IP_HR", "Matrix", "Coverage",
-                               "Transforms", "Checks", "Chart data", "Read me"]
+                               "Attribute usage", "Usage detail", "Transforms", "Checks", "Chart data",
+                               "Read me"]
     sheet = book["IP_HR"]
     assert [c.value for c in sheet[1]][:4] == ["Identity attribute", "Display name", "Mapping", "Explanation"]
     assert [c.value for c in sheet[2]][:3] == ["uid", "UID", "Direct copy"]
@@ -120,6 +121,66 @@ def test_workbook_sheets_and_summary(tmp_path):
     assert sum(n.startswith("xl/charts/chart") for n in package.namelist()) == 4
     dashboard = load_workbook(path)["Dashboard"]
     assert dashboard["B4"].value == "Identity profiles" and dashboard["B5"].value == "2"
+
+
+POLICIES = [{"source": "AD", "usageType": "CREATE", "fields": [
+    {"name": "mail", "transform": {"type": "identityAttribute", "attributes": {"name": "email"}}},
+    {"name": "cn", "transform": {"type": "reference", "attributes": {"id": "Full name"}}},
+    {"name": "free", "type": "string"}]}]
+TRANSFORMS_WITH_READERS = {**TRANSFORMS, "Full name": {
+    "name": "Full name", "type": "concat", "attributes": {"values": [
+        {"type": "identityAttribute", "attributes": {"name": "firstname"}},
+        {"type": "static", "attributes": {"value": " $lastname"}}]}}}
+
+
+def test_attribute_usage_across_profiles_transforms_and_policies(tmp_path):
+    from isc_reporter import attribute_usage
+
+    profile = {**PROFILE, "identityAttributeConfig": {"attributeTransforms": [
+        mapping("email", account("mail")),
+        mapping("firstname", account("first")),
+        mapping("lastname", account("last")),
+        mapping("displayName", {"type": "identityAttribute", "attributes": {"name": "firstname"}})]}}
+    rows = [identity_profiles.mapping_rows(profile, TRANSFORMS_WITH_READERS)]
+    known = {"email", "firstname", "lastname", "displayName"}
+    usages = attribute_usage.collect([profile], rows, TRANSFORMS_WITH_READERS, POLICIES, known)
+    reads = {(u["attribute"], u["where"], u["object"], u["location"]) for u in usages if u["role"] == "Read"}
+    assert reads == {
+        ("firstname", "Identity profile", "IP_HR", "mapping of 'displayName'"),
+        ("firstname", "Transform", "Full name", "type concat"),
+        ("lastname", "Transform", "Full name", "type concat"),
+        ("email", "Provisioning policy", "AD / CREATE", "field 'mail'"),
+        ("firstname", "Provisioning policy", "AD / CREATE", "field 'cn'"),   # through the named transform
+        ("lastname", "Provisioning policy", "AD / CREATE", "field 'cn'"),
+    }
+    summary = {r["Identity attribute"]: r for r in attribute_usage.summary_rows(
+        usages, ["IP_HR"], lambda a: "")}
+    assert summary["email"]["Mapped in"] == "1 / 1: IP_HR"
+    assert summary["email"]["Used in provisioning policies"] == "AD / CREATE: field 'mail'"
+    assert summary["email"]["Sources"] == "AD"
+    assert summary["firstname"]["Read by transforms"] == "Full name"
+    assert summary["firstname"]["Uses"] == 3
+
+    from openpyxl import load_workbook
+
+    path = str(tmp_path / "usage.xlsx")
+    identity_profiles.write_xlsx(path, [profile], TRANSFORMS_WITH_READERS, policies=POLICIES)
+    book = load_workbook(path)
+    sheet = book["IP_HR"]
+    header = [c.value for c in sheet[1]]
+    used_in = header.index("Also used in")
+    email = next(r for r in sheet.iter_rows(min_row=2, values_only=True) if r[0] == "email")
+    assert "Provisioning policy AD / CREATE: field 'mail'" in email[used_in]
+    assert [c.value for c in book["Usage detail"][1]] == [
+        "Identity attribute", "Where", "Object", "Location", "Role", "Detail"]
+
+
+def test_load_policies_from_source_export(tmp_path):
+    (tmp_path / "source.json").write_text(json.dumps({"objects": [{"object": {
+        "name": "AD", "provisioningPolicies": POLICIES[0:1][0:1] and [
+            {"usageType": "CREATE", "fields": POLICIES[0]["fields"]}]}}]}), encoding="utf-8")
+    policies = identity_profiles.load_policies([str(tmp_path)])
+    assert [(p["source"], p["usageType"]) for p in policies] == [("AD", "CREATE")]
 
 
 def test_pdf(tmp_path):

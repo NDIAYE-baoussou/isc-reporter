@@ -11,22 +11,27 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 from collections import Counter
 from dataclasses import dataclass, field
 
-from isc_reporter import dashboard
+from isc_reporter import attribute_usage, dashboard
+from isc_reporter.api import error_message
 from isc_reporter.errors import UsageError
+
+log = logging.getLogger("isc_reporter")
 
 MAX_DEPTH = 8
 WARNING, INFO = "Warning", "Info"
 
 MAPPING_COLUMNS = ["identity_attribute", "display_name", "mapping", "explanation", "sources",
-                   "source_attributes", "transforms", "logic", "notes", "definition"]
+                   "source_attributes", "transforms", "logic", "used_in", "notes", "definition"]
 HEADERS = {"identity_attribute": "Identity attribute", "display_name": "Display name",
            "mapping": "Mapping", "explanation": "Explanation", "sources": "Source(s)",
            "source_attributes": "Source attribute(s)", "transforms": "Transforms used",
-           "logic": "Logic (short form)", "notes": "Points to check", "definition": "Definition (JSON)"}
+           "logic": "Logic (short form)", "used_in": "Also used in",
+           "notes": "Points to check", "definition": "Definition (JSON)"}
 COLUMN_HELP = {
     "identity_attribute": "Technical name of the identity attribute.",
     "display_name": "Name shown in the ISC user interface.",
@@ -36,6 +41,8 @@ COLUMN_HELP = {
     "source_attributes": "Account attribute(s) read, prefixed with the source when there are several.",
     "transforms": "Named transforms used, including transforms called by other transforms.",
     "logic": "Compact formula: Source.attribute, \"static value\", transform(input)...",
+    "used_in": "Where else the value of this attribute is read: other mappings, named transforms and "
+               "provisioning policies of the sources (see Attribute usage).",
     "notes": "Points to check (details in the Checks sheet).",
     "definition": "The mapping exactly as configured in ISC (JSON).",
 }
@@ -129,6 +136,41 @@ def _objects(data):
                 yield from _objects(item.get("object", item) if isinstance(item, dict) else item)
         else:
             yield data
+
+
+def load_policies(paths: list[str]) -> list[dict]:
+    """Provisioning policies of the sources found in exported files (a source export lists its
+    ``provisioningPolicies``)."""
+    policies = []
+    for path in paths:
+        files = (sorted(glob.glob(os.path.join(path, "**", "*.json"), recursive=True))
+                 if os.path.isdir(path) else [path])
+        for file in files:
+            try:
+                with open(file, encoding="utf-8-sig") as fh:
+                    data = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            for obj in _objects(data):
+                if isinstance(obj, dict):
+                    policies += [{**policy, "source": obj.get("name", "")}
+                                 for policy in obj.get("provisioningPolicies") or []]
+    return policies
+
+
+def fetch_policies(isc) -> list[dict]:
+    """Provisioning policies of every source of the tenant (``source`` is the source name)."""
+    from isc_reporter.api import list_all, model_json
+
+    policies = []
+    for source in list_all(isc.sources.list_sources_v1):
+        try:
+            found = list_all(isc.sources.list_provisioning_policies_v1, source_id=source.id)
+        except Exception as exc:   # one unreadable source must not stop the report
+            log.warning("Provisioning policies of %s not read: %s", source.name, error_message(exc))
+            continue
+        policies += [{**model_json(policy), "source": source.name} for policy in found]
+    return policies
 
 
 def fetch(isc) -> tuple[list[dict], dict[str, dict], dict[str, str]]:
@@ -318,8 +360,8 @@ def profile_checks(profile: dict, rows: list[dict]) -> list[tuple[str, str, str,
 
 # -- rendering ------------------------------------------------------------------
 
-RESERVED_SHEETS = {"Dashboard", "Profiles", "Matrix", "Coverage", "Transforms", "Checks", "Chart data",
-                   "Read me"}
+RESERVED_SHEETS = {"Dashboard", "Profiles", "Matrix", "Coverage", "Attribute usage", "Usage detail",
+                   "Transforms", "Checks", "Chart data", "Read me"}
 SEVERITY_FILLS = {WARNING: "F8CBAD", INFO: "DDEBF7"}
 # KINDS colours are pale cell backgrounds; charts use strong ones.
 CHART_COLOURS = {"Direct copy": dashboard.GREEN, "Named transform": dashboard.BLUE,
@@ -335,6 +377,9 @@ READ_ME = [
     ("One sheet per profile", "One line per identity attribute. Start with the Explanation column."),
     ("Matrix", "Identity attributes (lines) x profiles (columns): how each profile fills each attribute."),
     ("Coverage", "Attributes that are not mapped in every profile."),
+    ("Attribute usage", "One line per identity attribute: the profiles that map it and every mapping, "
+                        "named transform and source provisioning policy that reads it."),
+    ("Usage detail", "The same, one line per use: where, which object, which field, how."),
     ("Transforms", "Every named transform used, what it does, where it is used, and its definition."),
     ("Checks", "Points worth a look: Warning = probably wrong, Info = good to know."),
     *[(f"Column: {HEADERS[c]}", COLUMN_HELP[c]) for c in MAPPING_COLUMNS],
@@ -351,15 +396,23 @@ READ_ME = [
                         "the lifecycle states defined on the profile."),
 ]
 WIDE = {"Explanation", "Logic (short form)", "Definition (JSON)", "Points to check", "Description",
-        "Details", "Used by (profile: attribute)", "Not mapped in"}
+        "Details", "Used by (profile: attribute)", "Not mapped in", "Also used in",
+        "Read by profile mappings", "Read by transforms", "Used in provisioning policies", "Detail"}
 
 
 def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = None,
                     display_names: dict[str, str] | None = None, origin: str = "",
-                    title: str = "Identity profile mappings") -> dashboard.Dashboard:
+                    title: str = "Identity profile mappings",
+                    policies: list[dict] | None = None) -> dashboard.Dashboard:
     transforms = transforms or {}
     profiles = sorted(profiles, key=lambda p: (p.get("priority") or 0, p.get("name", "")))
     all_rows = [mapping_rows(p, transforms, display_names) for p in profiles]
+    known = {r["identity_attribute"] for rows in all_rows for r in rows} | set(display_names or {})
+    usages = attribute_usage.collect(profiles, all_rows, transforms, policies or [], known)
+    elsewhere = attribute_usage.used_in(usages)
+    for rows in all_rows:
+        for row in rows:
+            row["used_in"] = elsewhere.get(row["identity_attribute"], "")
     all_checks = [profile_checks(p, rows) for p, rows in zip(profiles, all_rows, strict=True)]
     names = [p.get("name", "") for p in profiles]
     kind_colours = {label: colour for label, colour, _ in KINDS.values()}
@@ -376,6 +429,10 @@ def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = N
     tables.append(dashboard.Table("Matrix", _matrix_rows(names, all_rows), wide=WIDE | set(names)))
     if len(profiles) > 1:
         tables.append(dashboard.Table("Coverage", _coverage_rows(names, all_rows), wide=WIDE))
+    shown = display_names or {}
+    tables.append(dashboard.Table("Attribute usage", attribute_usage.summary_rows(
+        usages, names, lambda a: shown.get(a) or STANDARD_NAMES.get(a, "")), wide=WIDE))
+    tables.append(dashboard.Table("Usage detail", attribute_usage.detail_rows(usages), wide=WIDE))
     tables.append(dashboard.Table("Transforms", _transform_rows(profiles, all_rows, transforms), wide=WIDE))
     tables.append(dashboard.Table("Checks", check_rows, wide=WIDE, fills={"Severity": SEVERITY_FILLS}))
 
@@ -509,15 +566,19 @@ def _check_rows(profiles, all_checks) -> list[dict]:
 
 
 def write_xlsx(path: str, profiles: list[dict], transforms: dict[str, dict] | None = None,
-               display_names: dict[str, str] | None = None, origin: str = "") -> int:
+               display_names: dict[str, str] | None = None, origin: str = "",
+               policies: list[dict] | None = None) -> int:
     """Write the mapping workbook; returns the number of profiles documented."""
-    dashboard.write_xlsx(build_dashboard(profiles, transforms, display_names, origin), path)
+    dashboard.write_xlsx(build_dashboard(profiles, transforms, display_names, origin,
+                                         policies=policies), path)
     return len(profiles)
 
 
 def write_pdf(path: str, profiles: list[dict], transforms: dict[str, dict] | None = None,
-              display_names: dict[str, str] | None = None, origin: str = "") -> int:
-    dashboard.write_pdf(build_dashboard(profiles, transforms, display_names, origin), path)
+              display_names: dict[str, str] | None = None, origin: str = "",
+              policies: list[dict] | None = None) -> int:
+    dashboard.write_pdf(build_dashboard(profiles, transforms, display_names, origin,
+                                        policies=policies), path)
     return len(profiles)
 
 

@@ -151,14 +151,17 @@ def _profiles(args) -> int:
 
     if args.source:
         profiles, transforms = identity_profiles.load_files(args.source)
+        policies = identity_profiles.load_policies(args.source)
         names: dict[str, str] = {}
         origin = ", ".join(os.path.basename(os.path.normpath(path)) for path in args.source)
         log.info("Read %d profile(s) and %d transform(s) from files", len(profiles), len(transforms))
     else:
         isc = _connect(args)
         profiles, transforms, names = identity_profiles.fetch(isc)
+        policies = identity_profiles.fetch_policies(isc)
         origin = isc.base_url
-        log.info("Read %d profile(s) and %d transform(s) from the tenant", len(profiles), len(transforms))
+        log.info("Read %d profile(s), %d transform(s) and %d provisioning policy(ies) from the tenant",
+                 len(profiles), len(transforms), len(policies))
     if args.profile:
         wanted = {name.lower() for name in args.profile}
         profiles = [p for p in profiles if p.get("name", "").lower() in wanted]
@@ -170,7 +173,7 @@ def _profiles(args) -> int:
     base = _base(args, "identity-profiles")
     for fmt in dict.fromkeys(args.format):
         writer = identity_profiles.write_xlsx if fmt == "xlsx" else identity_profiles.write_pdf
-        writer(base + "." + fmt, profiles, transforms, names, origin)
+        writer(base + "." + fmt, profiles, transforms, names, origin, policies)
         log.info("%s: %s (%d profile(s))", "Excel" if fmt == "xlsx" else "PDF", base + "." + fmt,
                  len(profiles))
     return 0

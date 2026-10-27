@@ -208,6 +208,26 @@ def history(rng: random.Random, now: datetime, people: list[dict]):
     return data
 
 
+def sample_policies() -> list[dict]:
+    """Provisioning policies of two fictional sources (they read identity attributes)."""
+    def read(name):
+        return {"type": "identityAttribute", "attributes": {"name": name}}
+
+    return [
+        {"source": "Active Directory", "name": "Account", "usageType": "CREATE", "fields": [
+            {"name": "sAMAccountName", "transform": {"type": "rule", "attributes": {
+                "name": "Create Unique LDAP Attribute", "template": "{firstname}.{lastname}"}}},
+            {"name": "mail", "transform": read("email")},
+            {"name": "department", "transform": read("department")},
+            {"name": "displayName", "transform": read("displayName")},
+            {"name": "password", "type": "secret", "isRequired": True}]},
+        {"source": "Active Directory", "name": "Update", "usageType": "UPDATE", "fields": [
+            {"name": "manager", "transform": {"type": "getReferenceIdentityAttribute", "attributes": {
+                "uid": "manager", "attributeName": "uid"}}},
+            {"name": "department", "transform": read("department")}]},
+    ]
+
+
 def sample_profiles() -> tuple[list[dict], dict[str, dict]]:
     def account(attribute, source="HR System"):
         return {"type": "accountAttribute", "attributes": {"sourceName": source, "attributeName": attribute}}
@@ -336,7 +356,7 @@ def run(folder: str) -> list[str]:
     profiles, transforms = sample_profiles()
     for extension, writer in (("xlsx", identity_profiles.write_xlsx), ("pdf", identity_profiles.write_pdf)):
         path = os.path.join(folder, f"identity-profiles.{extension}")
-        writer(path, profiles, transforms, origin="demo")
+        writer(path, profiles, transforms, origin="demo", policies=sample_policies())
         out.append(path)
     plan = source_migration.analyse(
         profiles,
