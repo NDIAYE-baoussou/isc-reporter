@@ -1,0 +1,7 @@
+{
+  "description": "Who has what, counted per department and location",
+  "type": "identities",
+  "title": "Identities by department",
+  "query": "*",
+  "group_by": ["attributes.department", "attributes.location", "attributes.cloudLifecycleState"]
+}

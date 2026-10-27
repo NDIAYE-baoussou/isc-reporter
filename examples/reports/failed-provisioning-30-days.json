@@ -1,0 +1,6 @@
+{
+  "description": "Provisioning failures over the last 30 days",
+  "type": "events",
+  "title": "Provisioning failures (30 days)",
+  "query": "status:FAILED AND created:[now-30d TO now]"
+}

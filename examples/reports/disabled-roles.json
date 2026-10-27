@@ -1,0 +1,7 @@
+{
+  "description": "Disabled roles with their access profiles",
+  "type": "roles",
+  "title": "Disabled roles",
+  "query": "enabled:false",
+  "expand": "access-profiles"
+}

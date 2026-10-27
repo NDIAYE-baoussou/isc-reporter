@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isc-reporter"
+dynamic = ["version"]
+description = "Excel dashboards and PDF reports for SailPoint Identity Security Cloud: search, certification campaigns, identity attribute history, identity profile mappings and source migrations."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Ousmane N'Diaye" }]
+keywords = ["sailpoint", "identity-security-cloud", "identitynow", "iam", "iga", "reporting",
+            "excel", "pdf", "certification", "audit"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Information Technology",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Office/Business",
+]
+dependencies = [
+    "sailpoint>=2.1,<3",
+    "XlsxWriter>=3.1",
+    "reportlab>=4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "openpyxl>=3.1", "build>=1"]
+
+[project.scripts]
+isc-reporter = "isc_reporter.cli:main"
+
+# Uncomment once the GitHub repository exists:
+# [project.urls]
+# Homepage = "https://github.com/<owner>/isc-reporter"
+# Issues = "https://github.com/<owner>/isc-reporter/issues"
+# Changelog = "https://github.com/<owner>/isc-reporter/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "isc_reporter.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

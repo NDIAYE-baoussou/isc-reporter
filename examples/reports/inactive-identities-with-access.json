@@ -1,0 +1,7 @@
+{
+  "description": "Leavers who still hold access: one line per identity, plus one line per access item",
+  "type": "identities",
+  "title": "Inactive identities still holding access",
+  "query": "attributes.cloudLifecycleState:inactive AND accessCount:>0",
+  "expand": "access"
+}

@@ -1,0 +1,23 @@
+# Credentials: never commit
+config.json
+.env
+*.env
+
+# Reports and logs: they contain personal data (names, emails, access)
+outputs/
+logs/
+*.xlsx
+*.pdf
+*.csv
+!examples/**/*.csv
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/

@@ -1,0 +1,6 @@
+{
+  "description": "Privileged entitlements, per source and owner",
+  "type": "entitlements",
+  "title": "Privileged entitlements",
+  "query": "privileged:true"
+}
