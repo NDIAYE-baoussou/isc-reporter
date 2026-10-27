@@ -40,11 +40,10 @@ dev = ["pytest>=8", "ruff>=0.5", "openpyxl>=3.1", "build>=1"]
 [project.scripts]
 isc-reporter = "isc_reporter.cli:main"
 
-# Uncomment once the GitHub repository exists:
-# [project.urls]
-# Homepage = "https://github.com/<owner>/isc-reporter"
-# Issues = "https://github.com/<owner>/isc-reporter/issues"
-# Changelog = "https://github.com/<owner>/isc-reporter/blob/main/CHANGELOG.md"
+[project.urls]
+Homepage = "https://github.com/NDIAYE-baoussou/isc-reporter"
+Issues = "https://github.com/NDIAYE-baoussou/isc-reporter/issues"
+Changelog = "https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/CHANGELOG.md"
 
 [tool.setuptools.dynamic]
 version = { attr = "isc_reporter.__version__" }
