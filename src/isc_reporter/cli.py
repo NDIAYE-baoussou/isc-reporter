@@ -14,6 +14,7 @@ from isc_reporter.errors import UsageError
 from isc_reporter.logs import setup_logging
 
 log = logging.getLogger("isc_reporter")
+USAGE_CHOICES = ("CREATE", "UPDATE", "ENABLE", "DISABLE")
 
 
 def _connect(args):
@@ -221,6 +222,44 @@ def _migration(args) -> int:
     return 0
 
 
+def _sync(args) -> int:
+    from isc_reporter import sync_impact
+
+    explicit = sync_impact.merge(sync_impact.parse_maps(args.map), sync_impact.read_map_file(args.map_file))
+    isc = _connect(args)
+    source = sync_impact.find_source(isc, args.source)
+    ignored: list[dict] = []
+    mappings = explicit
+    if not args.only_map:
+        policies = sync_impact.fetch_policies(isc, source.id)
+        found, ignored = sync_impact.policy_mappings(policies, args.usage)
+        log.info("%s: %d provisioning polic(ies), %d attribute(s) mapped directly to an identity attribute",
+                 source.name, len(policies), len(found))
+        mappings = sync_impact.merge(found, explicit)
+    if not mappings:
+        raise UsageError(f"{source.name} has no {'/'.join(args.usage)} provisioning policy field mapped "
+                         "directly to an identity attribute; give one with "
+                         "--map identityAttribute=accountAttribute")
+    accounts = sync_impact.fetch_accounts(isc, source.id)
+    log.info("%d account(s) read from %s", len(accounts), source.name)
+    identities = sync_impact.fetch_identities(isc, [a["identityId"] for a in accounts if a.get("identityId")])
+    result = sync_impact.analyse(source.name, accounts, identities, mappings, ignored, args.threshold)
+    base = _base(args, f"sync-impact_{source.name}".replace(" ", "-").replace("/", "-"))
+    for fmt in dict.fromkeys(args.format):
+        path = base + "." + fmt
+        if fmt == "xlsx":
+            sync_impact.write_xlsx(path, result, isc.base_url, args.title or "", args.max_details)
+        elif fmt == "pdf":
+            sync_impact.write_pdf(path, result, isc.base_url, args.title or "", args.max_details,
+                                  args.pdf_max_rows)
+        else:
+            sync_impact.write_csv(path, result)
+        log.info("%s: %s", fmt.upper(), path)
+    log.info("%s: %d of %d account(s) would be updated (%.1f%%), %d attribute update(s)", result.verdict,
+             result.impacted, result.analysed, result.share, sum(s.updates for s in result.stats.values()))
+    return 0
+
+
 def _demo(args) -> int:
     from isc_reporter import demo
 
@@ -252,8 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
-    def command(name, func, help_text):
-        p = commands.add_parser(name, help=help_text, description=help_text, parents=[common])
+    def command(name, func, help_text, aliases=()):
+        p = commands.add_parser(name, help=help_text, description=help_text, parents=[common],
+                                aliases=list(aliases))
         p.set_defaults(func=func)
         return p
 
@@ -328,6 +368,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--suffix", help="name suffix of copied transforms and new profiles")
     p.add_argument("--no-pdf", action="store_true", help="Excel only")
     output(p, "output folder")
+
+    p = command("analyze-before-sync", _sync, "Forecast the bulk updates ISC could send to the target if "
+                                              "attribute synchronization is enabled on a source. "
+                                              "Changes nothing.", aliases=["analyzebeforesync"])
+    p.add_argument("source", metavar="SOURCE", help="source name")
+    p.add_argument("--map", action="append", metavar="IDENTITY=ACCOUNT",
+                   help="also compare this identity attribute with this account attribute (repeatable)")
+    p.add_argument("--map-file", metavar="CSV", help="identity_attribute;account_attribute lines to compare "
+                                                      "in addition")
+    p.add_argument("--only-map", action="store_true", help="compare only --map/--map-file, ignore the "
+                                                           "provisioning policy")
+    p.add_argument("--usage", nargs="+", type=str.upper, choices=list(USAGE_CHOICES), default=["CREATE"],
+                   help="provisioning policy usage type(s) to read (default: CREATE)")
+    p.add_argument("--threshold", type=float, default=10.0, metavar="PERCENT",
+                   help="share of accounts to update that is flagged as a bulk update (default 10)")
+    p.add_argument("--max-details", type=int, default=100_000, help="rows in the Accounts and Changes "
+                                                                    "sheets (the CSV has them all)")
+    p.add_argument("--title", help="report title")
+    p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
+    formats(p)
+    output(p)
 
     p = command("demo", _demo, "Write every report from fictional data, to see the output without a tenant.")
     output(p, "output folder")

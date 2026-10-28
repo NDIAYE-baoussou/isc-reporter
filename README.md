@@ -7,13 +7,13 @@ Excel dashboards and PDF reports for **SailPoint Identity Security Cloud (ISC)**
 `isc-reporter` turns what ISC knows into reports people can read: workbooks with KPI tiles,
 native Excel charts and filterable tables, and matching PDF files to send around.
 
-| Command | What you get |
-| --- | --- |
-| `search` | Any search (identities, access profiles, roles, entitlements, events, account activities, workflows) with **one line per object**: an identity's roles, access profiles, entitlements and accounts are consolidated instead of repeated on many lines. |
-| `campaigns` | Certification campaign dashboard: progress, approved / revoked / pending decisions by access type, reviewer workload, overdue certifications, and every reviewed item for audit evidence. |
-| `changes` | Identity attribute changes **with old and new values** over a period (e.g. department and manager changes of the last 30 days), which ISC search cannot show. |
-| `profiles` | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, and checks for likely mistakes. |
-| `migration` | Impact analysis for replacing a source (typically a new HR system): impacted identity profiles, transforms and attribute mappings, before/after, and draft JSON for the new objects. |
+| Command       | What you get                                                                                                                                                                                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `search`    | Any search (identities, access profiles, roles, entitlements, events, account activities, workflows) with **one line per object**: an identity's roles, access profiles, entitlements and accounts are consolidated instead of repeated on many lines. |
+| `campaigns` | Certification campaign dashboard: progress, approved / revoked / pending decisions by access type, reviewer workload, overdue certifications, and every reviewed item for audit evidence.                                                                    |
+| `changes`   | Identity attribute changes **with old and new values** over a period (e.g. department and manager changes of the last 30 days), which ISC search cannot show.                                                                                          |
+| `profiles`  | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, and checks for likely mistakes.                                                                                              |
+| `migration` | Impact analysis for replacing a source (typically a new HR system): impacted identity profiles, transforms and attribute mappings, before/after, and draft JSON for the new objects.                                                                         |
 
 **Read-only:** `isc-reporter` only reads from your tenant. It never creates, changes or deletes
 anything; the migration analysis writes its drafts to local files for you to review.
@@ -84,15 +84,15 @@ isc-reporter search events -q "status:FAILED AND created:[now-7d TO now]"
 isc-reporter search identities --columns displayName,email,attributes.location --group-by attributes.location
 ```
 
-| Type | One line per | Consolidated into the line | `--expand` (one line per item) |
-| --- | --- | --- | --- |
-| `identities` | identity | roles, access profiles, entitlements, accounts (list + count) | `access`, `accounts`, `apps` |
-| `access-profiles` | access profile | entitlements | `entitlements` |
-| `roles` | role | access profiles, entitlements | `access-profiles` |
-| `entitlements` | entitlement | | |
-| `events` | event | | |
-| `account-activities` | activity | account requests | `account-requests` |
-| `workflows` | workflow execution | | |
+| Type                   | One line per       | Consolidated into the line                                    | `--expand` (one line per item)   |
+| ---------------------- | ------------------ | ------------------------------------------------------------- | ---------------------------------- |
+| `identities`         | identity           | roles, access profiles, entitlements, accounts (list + count) | `access`, `accounts`, `apps` |
+| `access-profiles`    | access profile     | entitlements                                                  | `entitlements`                   |
+| `roles`              | role               | access profiles, entitlements                                 | `access-profiles`                |
+| `entitlements`       | entitlement        |                                                               |                                    |
+| `events`             | event              |                                                               |                                    |
+| `account-activities` | activity           | account requests                                              | `account-requests`               |
+| `workflows`          | workflow execution |                                                               |                                    |
 
 The workbook has a *Summary* (key figures and a chart per breakdown), the *Data* as an Excel
 table, a *Detail* sheet with `--expand`, and the *Query* used. Any other search index works too,
@@ -149,14 +149,6 @@ mapped, missing transforms, lifecycle state copied as is, identical mappings, ot
 `--from` reads a profile, a list of profiles or a configuration export, with transforms found in
 the same files.
 
-For every identity attribute the report also shows where else it is used, in the *Also used in*
-column of each profile sheet and in two sheets: *Attribute usage* (one line per attribute: the
-profiles that map it, the mappings and named transforms that read it, the source provisioning
-policies that use it, and which sources) and *Usage detail* (one line per use). Provisioning
-policies are read from every source of the tenant (this needs `idn:provisioning-policy:read` and
-sources read access; a source that cannot be read is skipped with a warning), or from a source
-export given to `--from`. Identity attributes used in rules (code) cannot be detected.
-
 ### Source migration analysis
 
 ![Source migration](docs/images/migration.png)
@@ -173,6 +165,34 @@ or same name in the new account schema), shows every mapping before and after, a
 JSON for the new identity profiles and transforms. Transforms are copied with a suffix so both
 sources can run in parallel (`--in-place` to update them instead). Lifecycle states, account
 correlation, provisioning policies and workflows are listed as next steps, not analysed.
+
+### Before enabling attribute synchronization
+
+```bash
+isc-reporter analyze-before-sync "Active Directory"
+isc-reporter analyze-before-sync "Active Directory" --map location=physicalDeliveryOfficeName
+isc-reporter analyze-before-sync "Active Directory" --map-file extra-mapping.csv --only-map
+isc-reporter analyze-before-sync "Active Directory" --format xlsx pdf csv --threshold 5
+```
+
+(`analyzebeforesync` also works.) Enabling attribute synchronization on a source can send a bulk of
+updates to the target system. The command changes nothing: it reads the source's provisioning
+policy, finds the fields mapped directly to an identity attribute (ISC only synchronises those),
+reads the accounts of the source and the identities they belong to, and counts what ISC could
+write: values **added**, **changed**, **cleared** (the riskiest) or changed in **case only**.
+
+`--map IDENTITY=ACCOUNT` (repeatable) and `--map-file` (a CSV with `identity_attribute;account_attribute`)
+add comparisons that are not in the policy yet; `--only-map` uses only those; `--usage` reads other
+policy usage types than `CREATE`. A verdict (*No update expected*, *Limited updates*, *Bulk update
+expected*) is given, a bulk update being flagged when a value would be cleared or when `--threshold`
+percent of the accounts (default 10) would be updated.
+
+Sheets: *Dashboard*, *Attributes* (per mapped attribute: accounts compared, added, changed, cleared,
+share, risk), *Accounts* (worst first), *Changes* (current and new value of every update; the CSV has
+them all), *Not analysed* (policy fields that are not a direct copy), *Checks*. Every difference is
+counted, as if ISC evaluated all accounts, so read the figures as an upper bound. The token needs read
+access to sources, provisioning policies (`idn:provisioning-policy:read`), accounts and search. The
+*Changes* sheet contains real attribute values: protect the file.
 
 ## Privacy
 

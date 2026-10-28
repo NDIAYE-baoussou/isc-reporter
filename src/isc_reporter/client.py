@@ -25,6 +25,10 @@ class Isc:
         return self._apis[name]
 
     @property
+    def accounts(self):
+        return self._api("AccountsApi")
+
+    @property
     def campaigns(self):
         return self._api("CertificationCampaignsApi")
 

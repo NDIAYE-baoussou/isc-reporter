@@ -30,7 +30,7 @@ class FakeApi:
 class FakeIsc:
     """Stands in for :class:`isc_reporter.client.Isc`."""
 
-    APIS = ("campaigns", "campaign_filters", "certifications", "certification_summaries",
+    APIS = ("accounts", "campaigns", "campaign_filters", "certifications", "certification_summaries",
             "identity_attributes", "identity_history", "identity_profiles", "search", "sources",
             "transforms")
 
