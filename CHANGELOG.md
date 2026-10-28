@@ -3,7 +3,7 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-28
 
 - `analyze-before-sync` (alias `analyzebeforesync`): forecast the bulk updates ISC could send to the
   target if attribute synchronization is enabled on a source, from its provisioning policy (and
