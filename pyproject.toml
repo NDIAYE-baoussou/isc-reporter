@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "isc-reporter"
 dynamic = ["version"]
-description = "Excel dashboards and PDF reports for SailPoint Identity Security Cloud: search, certification campaigns, identity attribute history, identity profile mappings and source migrations."
+description = "Reports and change-impact analysis for SailPoint Identity Security Cloud: search, certification campaigns, identity attribute history, identity attribute mappings and transform dependencies, leavers with access, source migrations, attribute sync and role enablement forecasts. Read-only."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -51,6 +51,9 @@ version = { attr = "isc_reporter.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+isc_reporter = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

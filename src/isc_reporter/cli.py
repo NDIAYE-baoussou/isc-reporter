@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 import time
 
@@ -147,12 +148,12 @@ def _changes(args) -> int:
 # -- identity profiles ---------------------------------------------------------------------
 
 
-def _profiles(args) -> int:
-    from isc_reporter import identity_profiles
+def _mappings(args) -> int:
+    from isc_reporter import identity_profiles, mappings_html
 
-    if args.command == "profiles":
-        log.warning("The 'profiles' command is now called 'identity-profiles'; the old name will be removed "
-                    "in a future version.")
+    if args.command != "mappings":
+        log.warning("The '%s' command is now called 'mappings'; the old name will be removed in a future "
+                    "version.", args.command)
     if args.source:
         profiles, transforms = identity_profiles.load_files(args.source)
         policies = identity_profiles.load_policies(args.source)
@@ -174,11 +175,13 @@ def _profiles(args) -> int:
             raise UsageError(f"identity profile(s) not found: {', '.join(sorted(missing))}")
     if not profiles:
         raise UsageError("no identity profile to document")
-    base = _base(args, "identity-profiles")
+    base = _base(args, "mappings")
+    writers = {"xlsx": ("Excel", identity_profiles.write_xlsx), "pdf": ("PDF", identity_profiles.write_pdf),
+               "html": ("Diagrams", mappings_html.write_html)}
     for fmt in dict.fromkeys(args.format):
-        writer = identity_profiles.write_xlsx if fmt == "xlsx" else identity_profiles.write_pdf
+        label, writer = writers[fmt]
         writer(base + "." + fmt, profiles, transforms, names, origin, policies)
-        log.info("%s: %s (%d profile(s))", "Excel" if fmt == "xlsx" else "PDF", base + "." + fmt,
+        log.info("%s: %s (%d profile(s))", label, base + "." + fmt,
                  len(profiles))
     return 0
 
@@ -295,6 +298,36 @@ def _leavers(args) -> int:
     return 0
 
 
+def _role_impact(args) -> int:
+    from isc_reporter import role_impact
+
+    if not args.role and not args.source:
+        raise UsageError("give the role name, or a role definition with --from")
+    role = role_impact.load_role(args.source, args.role) if args.source else None
+    isc = _connect(args)
+    role = role or role_impact.find_role(isc, args.role)
+    data = role_impact.fetch(isc, role, args.query)
+    for note in data.notes:
+        log.warning("%s", note)
+    result = role_impact.analyse(data)
+    for operation in result.unsupported:
+        log.warning("Criteria operation %s is not evaluated: it never matches in this report", operation)
+    base = _base(args, "role-impact_" + re.sub(r"[^\w.-]+", "-", role.get("name", "")).strip("-"))
+    for fmt in dict.fromkeys(args.format):
+        path = base + "." + fmt
+        if fmt == "xlsx":
+            role_impact.write_xlsx(path, result, args.title or "")
+        elif fmt == "pdf":
+            role_impact.write_pdf(path, result, args.title or "", args.pdf_max_rows)
+        else:
+            role_impact.write_csv(path, result)
+        log.info("%s: %s", fmt.upper(), path)
+    log.info("%d identit(ies) match the criteria; enabling the role would assign it to %d, provision %d "
+             "entitlement(s) and create %d account(s); %d would lose it", result.matching, result.new_members,
+             len(result.provisioning), result.new_accounts, result.outcomes[role_impact.LOSES])
+    return 0
+
+
 def _demo(args) -> int:
     from isc_reporter import demo
 
@@ -320,8 +353,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="isc-reporter",
         description="Reports and change-impact analysis for SailPoint Identity Security Cloud: search, "
-                    "certification campaigns, identity attribute history, identity profile mappings, "
-                    "leavers who still have access, source migrations and attribute sync forecasts. "
+                    "certification campaigns, identity attribute history, identity attribute mappings and "
+                    "transform dependencies, leavers who still have access, source migrations, attribute "
+                    "sync forecasts and "
+                    "role enablement impact. "
                     "Read-only.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -384,13 +419,13 @@ def build_parser() -> argparse.ArgumentParser:
     formats(p)
     output(p)
 
-    p = command("identity-profiles", _profiles, "Identity profile mappings: how every identity attribute "
-                                                "is built, where it is used, with sources, transforms and "
-                                                "checks.", aliases=["profiles"])
+    p = command("mappings", _mappings, "Identity attribute mappings of the identity profiles: how every "
+                                       "identity attribute is built, as a tree of its transforms, where it "
+                                       "is used, with checks.", aliases=["identity-profiles", "profiles"])
     p.add_argument("--from", dest="source", nargs="+", metavar="PATH",
                    help="exported JSON files or folders instead of the tenant")
     p.add_argument("--profile", action="append", metavar="NAME", help="only this profile (repeatable)")
-    formats(p, ("xlsx", "pdf"))
+    formats(p, ("xlsx", "pdf", "html"), default=("xlsx", "pdf", "html"))
     output(p)
 
     p = command("migration", _migration, "Impact of replacing a source by another on identity profiles, "
@@ -442,6 +477,20 @@ def build_parser() -> argparse.ArgumentParser:
                         "since leaving")
     p.add_argument("--grace", type=int, default=0, metavar="DAYS",
                    help="days allowed to revoke access after the departure date (with --date-attribute)")
+    p.add_argument("--title", help="report title")
+    p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
+    formats(p)
+    output(p)
+
+    p = command("role-impact", _role_impact, "Impact of enabling a role: the identities its membership "
+                                             "criteria select, the entitlements to provision and the "
+                                             "accounts to create, who would lose it. Changes nothing.")
+    p.add_argument("role", nargs="?", metavar="ROLE", help="role name")
+    p.add_argument("--from", dest="source", action="append", metavar="PATH",
+                   help="role JSON file or folder (an export, or a draft with new criteria) instead of the "
+                        "tenant's definition, repeatable; identities are still read from the tenant")
+    p.add_argument("--query", "-q", default="*", help="only identities matching this search query "
+                                                      "(default: all)")
     p.add_argument("--title", help="report title")
     p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
     formats(p)

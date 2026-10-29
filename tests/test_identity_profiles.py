@@ -106,8 +106,8 @@ def test_workbook_sheets_and_summary(tmp_path):
                                         origin="tenant") == 2
     book = load_workbook(path)
     assert book.sheetnames == ["Dashboard", "Profiles", "IP_HR_test", "IP_HR", "Matrix", "Coverage",
-                               "Attribute usage", "Usage detail", "Transforms", "Checks", "Chart data",
-                               "Read me"]
+                               "Attribute usage", "Usage detail", "Transforms", "Transform dependencies",
+                               "Checks", "Chart data", "Read me"]
     sheet = book["IP_HR"]
     assert [c.value for c in sheet[1]][:4] == ["Identity attribute", "Display name", "Mapping", "Explanation"]
     assert [c.value for c in sheet[2]][:3] == ["uid", "UID", "Direct copy"]
@@ -189,7 +189,7 @@ def test_pdf(tmp_path):
     assert open(path, "rb").read(4) == b"%PDF"
 
 
-def test_cli_from_tenant(tmp_path, monkeypatch):
+def test_cli_from_tenant(tmp_path, monkeypatch, capsys):
     attribute = type("A", (), {"name": "uid", "display_name": "User ID"})()
     isc = FakeIsc(identity_profiles=FakeApi(list_identity_profiles_v1=lambda **kw: []),
                   transforms=FakeApi(list_transforms_v1=lambda **kw: []),
@@ -201,7 +201,9 @@ def test_cli_from_tenant(tmp_path, monkeypatch):
         lambda limit, offset: [model] if offset == 0 else []
     monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: isc)
     out = tmp_path / "m.xlsx"
-    assert cli.main(["identity-profiles", "-o", str(out), "--log-dir", ""]) == 0
+    assert cli.main(["mappings", "-o", str(out), "--log-dir", ""]) == 0
     assert out.exists()
-    # the old name still works (an unknown profile: exit code 2)
-    assert cli.main(["profiles", "--profile", "nope", "-o", str(out), "--log-dir", ""]) == 2
+    # the old names still work, with a warning (an unknown profile: exit code 2)
+    for old in ("identity-profiles", "profiles"):
+        assert cli.main([old, "--profile", "nope", "-o", str(out), "--log-dir", ""]) == 2
+        assert f"The '{old}' command is now called 'mappings'" in capsys.readouterr().err

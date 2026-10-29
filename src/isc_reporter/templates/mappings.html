@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root {
+  --bg: #f4f6f8; --panel: #ffffff; --ink: #1f2933; --muted: #5f6b76; --line: #dde3e8;
+  --accent: #1e88e5; --hover: #eef4fb; --box: #ffffff; --edge: #90a4ae;
+  --attribute: #eceff1; --account: #edf7ee; --identity: #f1f3f4; --value: #fff4e5;
+  --named: #e8f2fd; --transform: #f5ebf8; --rule: #f3eeeb; --missing: #fdecec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12171c; --panel: #1a2128; --ink: #e3e9ee; --muted: #9aa9b5; --line: #2c3640;
+    --accent: #64b5f6; --hover: #22303c; --box: #1f2830; --edge: #5f7482;
+    --attribute: #26323b; --account: #1b3021; --identity: #252d33; --value: #362a17;
+    --named: #182c40; --transform: #2e1f36; --rule: #2f2723; --missing: #3a1c1c;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+button, input, select { font: inherit; color: inherit; }
+header.top {
+  display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px;
+  padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+h1 { margin: 0; font-size: 19px; }
+.sub { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.legend svg { width: 26px; height: 10px; }
+.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 290px minmax(0, 1fr) 330px; }
+.side, .details { background: var(--panel); overflow: auto; }
+.side { border-right: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.details { border-left: 1px solid var(--line); padding: 16px 18px; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; background: var(--bg); border-radius: 8px; padding: 3px; }
+.tab { border: 0; background: none; padding: 6px 4px; border-radius: 6px; cursor: pointer; color: var(--muted);
+       font-size: 13px; white-space: nowrap; }
+.tab.on { background: var(--panel); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+#search, #profile {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--box);
+}
+.list { display: flex; flex-direction: column; gap: 2px; }
+.group { margin: 10px 4px 4px; font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+         letter-spacing: .03em; }
+.item {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; align-items: center; text-align: left;
+  width: 100%; border: 0; background: none; padding: 6px 8px; border-radius: 6px; cursor: pointer;
+}
+.item:hover { background: var(--hover); }
+.item.on { background: var(--hover); box-shadow: inset 3px 0 0 var(--accent); }
+.item .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .note { grid-column: 1 / -1; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--bg); color: var(--muted);
+         white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.m-direct-copy { background: var(--account); } .m-named-transform { background: var(--named); }
+.m-inline-transform { background: var(--transform); } .m-static-value { background: var(--value); }
+.m-identity-attribute { background: var(--identity); } .m-rule { background: var(--rule); }
+.m-not-mapped, .b-warn { background: var(--missing); color: #c62828; }
+.b-attribute { background: var(--attribute); }
+.empty { color: var(--muted); padding: 8px; }
+.stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.crumb { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.crumb small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.tools button, .details button {
+  border: 1px solid var(--line); background: var(--box); padding: 4px 10px; border-radius: 6px; cursor: pointer;
+}
+.tools button:hover, .details button:hover { border-color: var(--accent); }
+.tools button.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.details button { margin: 4px 6px 10px 0; }
+#diagram { flex: 1; width: 100%; min-height: 380px; display: block; cursor: grab; touch-action: none; }
+#diagram.panning { cursor: grabbing; }
+.hint { margin: 0; padding: 6px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line);
+        background: var(--panel); }
+.details h2 { margin: 6px 0 12px; font-size: 17px; overflow-wrap: anywhere; }
+.details p { margin: 0 0 10px; }
+.kindtag { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+.field { margin: 0 0 12px; }
+.field dt { font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.field dd { margin: 3px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
+.field ul { margin: 3px 0 0; padding-left: 18px; }
+.links { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin-top: 3px; }
+.links a { color: var(--accent); cursor: pointer; text-decoration: none; overflow-wrap: anywhere; }
+.links a:hover { text-decoration: underline; }
+.check-Warning { color: #c62828; } .check-Info { color: var(--muted); }
+pre { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px; overflow: auto;
+      font: 12px/1.4 Consolas, "SFMono-Regular", Menlo, monospace; max-height: 340px; }
+@media (max-width: 1150px) {
+  body { height: auto; }
+  .layout { grid-template-columns: 260px minmax(0, 1fr); }
+  .details { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+  #diagram { height: 70vh; flex: none; }
+}
+@media (max-width: 720px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .side { max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>__TITLE__</h1>
+    <p class="sub" id="subtitle"></p>
+  </div>
+  <div class="legend" id="legend"></div>
+</header>
+<div class="layout">
+  <aside class="side">
+    <div class="tabs" role="tablist">
+      <button class="tab on" id="tab-map" role="tab">Transform map</button>
+      <button class="tab" id="tab-attributes" role="tab">Attribute details</button>
+    </div>
+    <input id="search" type="search" placeholder="Search: transform, attribute..." aria-label="Search">
+    <select id="profile" aria-label="Identity profile"></select>
+    <div class="list" id="list"></div>
+  </aside>
+  <main class="stage">
+    <div class="toolbar">
+      <div class="crumb" id="crumb"></div>
+      <div class="tools">
+        <button id="back" title="Back to the map of the transforms">&larr; Map</button>
+        <button id="chain" title="Show only what the selected box depends on and what depends on it">Only its chain</button>
+        <button id="direction" title="Change the direction of the diagram"></button>
+        <button id="expand" title="Show every step">Expand all</button>
+        <button id="collapse" title="Show only the first step">Collapse</button>
+        <button id="zoom-in" title="Zoom in">+</button>
+        <button id="zoom-out" title="Zoom out">&minus;</button>
+        <button id="fit" title="Show the whole diagram">Fit</button>
+        <button id="download" title="Save this diagram as an SVG image">Download SVG</button>
+      </div>
+    </div>
+    <svg id="diagram" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram">
+      <style>
+        .box { fill: var(--box, #ffffff); stroke: var(--line, #cfd8dc); stroke-width: 1; }
+        .band { stroke: none; }
+        .label { font: 600 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--ink, #1f2933); }
+        .what { font: 12px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--muted, #5f6b76); }
+        .role { font: italic 11.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+                fill: var(--muted, #5f6b76); }
+        .edge { fill: none; stroke: var(--edge, #90a4ae); stroke-width: 1.6; }
+        .edge.reads { stroke-dasharray: 6 4; }
+        .edge.uses { stroke: #78909c; }
+        .edge.back { stroke: #e53935; stroke-dasharray: 3 3; }
+        .edge.hl { stroke: var(--accent, #1e88e5); stroke-width: 2.6; }
+        .arrow { fill: var(--edge, #90a4ae); }
+        .arrow-hl { fill: var(--accent, #1e88e5); }
+        .dim { opacity: 0.16; }
+        .node { cursor: pointer; outline: none; }
+        .node:hover .box, .node:focus .box { stroke: var(--accent, #1e88e5); }
+        .selected .box { stroke: var(--accent, #1e88e5); stroke-width: 2.5; }
+        .toggle { cursor: pointer; }
+        .toggle circle { fill: var(--box, #ffffff); stroke: var(--edge, #90a4ae); stroke-width: 1.4; }
+        .toggle text { text-anchor: middle; font: 700 13px system-ui, sans-serif; fill: var(--ink, #1f2933); }
+        .kind-attribute .box { fill: var(--attribute, #eceff1); } .kind-attribute .band { fill: #546e7a; }
+        .kind-account .box { fill: var(--account, #edf7ee); } .kind-account .band { fill: #43a047; }
+        .kind-identity .box { fill: var(--identity, #f1f3f4); } .kind-identity .band { fill: #b0bec5; }
+        .kind-value .box { fill: var(--value, #fff4e5); } .kind-value .band { fill: #fb8c00; }
+        .kind-named .box { fill: var(--named, #e8f2fd); } .kind-named .band { fill: #1e88e5; }
+        .kind-transform .box { fill: var(--transform, #f5ebf8); } .kind-transform .band { fill: #8e24aa; }
+        .kind-rule .box { fill: var(--rule, #f3eeeb); } .kind-rule .band { fill: #6d4c41; }
+        .kind-missing .box { fill: var(--missing, #fdecec); stroke: #e53935; stroke-dasharray: 5 4; }
+        .kind-missing .band { fill: #e53935; }
+      </style>
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                orient="auto-start-reverse">
+          <path class="arrow" d="M0,0 L10,5 L0,10 z"></path>
+        </marker>
+        <marker id="arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6"
+                orient="auto-start-reverse">
+          <path class="arrow-hl" d="M0,0 L10,5 L0,10 z"></path>
+        </marker>
+      </defs>
+      <g id="viewport"></g>
+    </svg>
+    <p class="hint" id="hint"></p>
+  </main>
+  <aside class="details" id="details" aria-live="polite"></aside>
+</div>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var DATA = JSON.parse(document.getElementById("data").textContent);
+  var NS = "http://www.w3.org/2000/svg";
+  var PAD = 36;
+  // Boxes of the step diagrams and of the map.
+  var W = 300, H = 66, MAP_W = 236, MAP_H = 50;
+  var SIZES = { lr: { across: H + 18, along: W + 84 }, tb: { across: W + 28, along: H + 70 } };
+  var MAP_SIZE = { across: MAP_H + 22, along: MAP_W + 90 };
+  var KINDS = {
+    attribute: ["Identity attribute", "#546e7a"],
+    account: ["Account attribute read", "#43a047"],
+    identity: ["Identity attribute read", "#b0bec5"],
+    value: ["Fixed value", "#fb8c00"],
+    named: ["Named transform", "#1e88e5"],
+    transform: ["Transform step", "#8e24aa"],
+    rule: ["Rule", "#6d4c41"],
+    missing: ["Named transform not found", "#e53935"]
+  };
+  var MAP_KINDS = { transform: "named", missing: "missing", attribute: "attribute" };
+  var EDGES = {
+    calls: "calls: a named transform calls another one",
+    uses: "uses: the mapping of an identity attribute calls the transform",
+    reads: "reads: the transform reads an identity attribute"
+  };
+  var state = {
+    tab: "map", mode: "map", profile: "", query: "", focus: null, chainOnly: false,
+    current: null, collapsed: {}, selected: "0", layout: null, direction: "lr", chosen: false
+  };
+  var zoom = { k: 1, x: 0, y: 0 };
+  var svg = document.getElementById("diagram");
+  var viewport = document.getElementById("viewport");
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, props) {
+    var node = document.createElement(tag);
+    Object.keys(props || {}).forEach(function (key) {
+      var value = props[key];
+      if (value == null) return;
+      if (key === "text") node.textContent = value;
+      else if (key === "class") node.className = value;
+      else if (key.slice(0, 2) === "on") node.addEventListener(key.slice(2), value);
+      else node.setAttribute(key, value);
+    });
+    for (var i = 2; i < arguments.length; i++) if (arguments[i] != null) node.append(arguments[i]);
+    return node;
+  }
+  function svgEl(tag, attrs, text) {
+    var node = document.createElementNS(NS, tag);
+    Object.keys(attrs || {}).forEach(function (key) { node.setAttribute(key, attrs[key]); });
+    if (text != null) node.textContent = text;
+    return node;
+  }
+  function cut(text, size) {
+    text = String(text == null ? "" : text);
+    return text.length > size ? text.slice(0, size - 1) + "…" : text;
+  }
+  function wrap(text, size, count) {
+    var lines = [""];
+    String(text || "").split(/\s+/).forEach(function (word) {
+      var last = lines.length - 1;
+      if (!lines[last]) lines[last] = word;
+      else if ((lines[last] + " " + word).length <= size) lines[last] += " " + word;
+      else lines.push(word);
+    });
+    if (lines.length > count) {
+      lines = lines.slice(0, count);
+      lines[count - 1] = cut(lines[count - 1] + " …", size);
+    }
+    return lines.map(function (line) { return cut(line, size); });
+  }
+  function slug(text) { return String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "-"); }
+  function words(node, out) {
+    out.push(node.label || "", node.role || "");
+    (node.children || []).forEach(function (child) { words(child, out); });
+    return out;
+  }
+  function byLabel(a, b) {
+    var x = a.label.toLowerCase(), y = b.label.toLowerCase();
+    return x < y ? -1 : x > y ? 1 : 0;
+  }
+
+  // -- data -----------------------------------------------------------------------------------------
+
+  var attributes = {};
+  DATA.profiles.forEach(function (profile, index) {
+    profile.attributes.forEach(function (attribute) {
+      attribute.profileIndex = index;
+      attribute.search = [attribute.name, attribute.displayName, attribute.mapping]
+        .concat(words(attribute.tree, [])).join(" ").toLowerCase();
+      attributes[profile.name + "\u0000" + attribute.name] = attribute;
+    });
+  });
+  var transforms = {};
+  DATA.transforms.forEach(function (transform) { transforms[transform.name] = transform; });
+
+  // The map: named transforms and the identity attributes that link them; edges go from a dependency
+  // to what depends on it.
+  var graph = { nodes: {}, deps: {}, users: {} };
+  DATA.graph.nodes.forEach(function (node) {
+    graph.nodes[node.id] = node;
+    graph.deps[node.id] = [];
+    graph.users[node.id] = [];
+    node.search = [node.label, node.type, node.profile, node.what].join(" ").toLowerCase();
+  });
+  DATA.graph.edges.forEach(function (edge) {
+    graph.deps[edge.to].push({ id: edge.from, kind: edge.kind });
+    graph.users[edge.from].push({ id: edge.to, kind: edge.kind });
+  });
+  function closure(id, links) {
+    var found = {}, stack = [id];
+    while (stack.length) {
+      var current = stack.pop();
+      if (found[current]) continue;
+      found[current] = true;
+      links[current].forEach(function (link) { stack.push(link.id); });
+    }
+    return found;
+  }
+  function attributeOf(node) { return attributes[node.profile + "\u0000" + node.label]; }
+
+  // -- header, legend and list --------------------------------------------------------------------------
+
+  function renderHeader() {
+    var count = DATA.graph.nodes.filter(function (n) { return n.kind !== "attribute"; }).length;
+    $("subtitle").textContent = DATA.subtitle + " · " + DATA.profiles.length + " identity profile(s), " +
+      count + " named transform(s)";
+    var select = $("profile");
+    select.append(el("option", { value: "", text: "All identity profiles" }));
+    DATA.profiles.forEach(function (profile, index) {
+      select.append(el("option", { value: String(index), text: profile.name }));
+    });
+  }
+
+  function renderLegend() {
+    var legend = $("legend");
+    legend.replaceChildren();
+    var map = state.mode === "map";
+    (map ? ["named", "missing", "attribute"] : Object.keys(KINDS)).forEach(function (kind) {
+      var label = map && kind === "attribute" ? "Identity attribute of a profile" : KINDS[kind][0];
+      legend.append(el("span", {}, el("i", { style: "background:" + KINDS[kind][1] }), label));
+    });
+    if (map) {
+      Object.keys(EDGES).forEach(function (kind) {
+        var line = svgEl("svg", { viewBox: "0 0 26 10" });
+        line.append(svgEl("line", { x1: 0, y1: 5, x2: 26, y2: 5, class: "edge " + kind }));
+        legend.append(el("span", { title: EDGES[kind] }, line, kind));
+      });
+    }
+  }
+
+  function renderList() {
+    var list = $("list");
+    list.replaceChildren();
+    var query = state.query.trim().toLowerCase();
+    $("profile").hidden = state.tab !== "attributes";
+    if (state.tab === "map") {
+      var nodes = DATA.graph.nodes.filter(function (n) { return !query || n.search.indexOf(query) >= 0; });
+      var named = nodes.filter(function (n) { return n.kind !== "attribute"; }).sort(byLabel);
+      var linked = nodes.filter(function (n) { return n.kind === "attribute"; }).sort(byLabel);
+      if (named.length) list.append(el("div", { class: "group", text: "Named transforms" }));
+      named.forEach(function (node) {
+        var missing = node.kind === "missing", unused = !node.usedIn.length;
+        var note = missing ? "not found in the tenant or export" :
+          unused ? "not used by any identity profile" : "used in " + node.usedIn.join(", ");
+        list.append(listItem(node, missing ? "not found" : node.type || "", note,
+                             missing || unused ? "b-warn" : "m-named-transform"));
+      });
+      if (linked.length) list.append(el("div", { class: "group", text: "Identity attributes linked to them" }));
+      linked.forEach(function (node) { list.append(listItem(node, node.profile, node.mapping, "b-attribute")); });
+    } else {
+      DATA.profiles.forEach(function (profile, index) {
+        if (state.profile !== "" && String(index) !== state.profile) return;
+        var shown = profile.attributes.filter(function (a) { return !query || a.search.indexOf(query) >= 0; });
+        if (!shown.length) return;
+        list.append(el("div", { class: "group", text: profile.name + (profile.source ? " · " + profile.source : "") }));
+        shown.forEach(function (attribute) {
+          var on = state.mode === "detail" && state.current && state.current.attribute === attribute;
+          list.append(el("button", { class: "item" + (on ? " on" : ""), onclick: function () { openAttribute(attribute); } },
+            el("span", { class: "name", text: attribute.name }),
+            el("span", { class: "badge m-" + slug(attribute.mapping), text: attribute.mapping }),
+            attribute.displayName ? el("span", { class: "note", text: attribute.displayName }) : null));
+        });
+      });
+    }
+    if (!list.children.length) {
+      list.append(el("p", { class: "empty", text: state.tab === "map" && !DATA.graph.nodes.length ?
+        "No named transform in these identity profiles." : "Nothing matches." }));
+    }
+  }
+
+  function listItem(node, badge, note, style) {
+    var on = state.mode === "map" && state.focus === node.id;
+    return el("button", { class: "item" + (on ? " on" : ""), onclick: function () { focusNode(node.id, true); } },
+      el("span", { class: "name", text: node.label }),
+      el("span", { class: "badge " + style, text: badge }),
+      el("span", { class: "note", text: note }));
+  }
+
+  function setTab(tab) {
+    state.tab = tab;
+    $("tab-map").classList.toggle("on", tab === "map");
+    $("tab-attributes").classList.toggle("on", tab === "attributes");
+    renderList();
+  }
+
+  function setHash(hash) {
+    try { history.replaceState(null, "", hash ? "#" + hash : location.pathname); } catch (e) { /* file:// */ }
+  }
+
+  function updateToolbar() {
+    var map = state.mode === "map";
+    $("back").hidden = map || state.tab !== "map";
+    $("chain").hidden = !map;
+    $("chain").classList.toggle("on", state.chainOnly);
+    ["direction", "expand", "collapse"].forEach(function (id) { $(id).hidden = map; });
+    $("hint").textContent = map ?
+      "Read from left to right: each named transform comes after what it depends on. Click a box to light up " +
+      "what it depends on and what depends on it. Drag to move, scroll to zoom." :
+      (state.direction === "lr" ?
+        "Read from left to right: the data on the left goes through each step to the result on the right." :
+        "Read from top to bottom: the data at the top goes through each step to the result at the bottom.") +
+      " Click a box for its details, ± to fold its inputs. Drag to move, scroll to zoom.";
+    renderLegend();
+  }
+
+  // -- the map of the named transforms ------------------------------------------------------------------
+
+  // Layers: a box comes after everything it depends on (edges closing a loop are left out); within a
+  // layer, boxes are ordered by the average place of their neighbours, so that few edges cross.
+  function mapLayout(only) {
+    var ids = DATA.graph.nodes.map(function (n) { return n.id; }).filter(function (id) { return !only || only[id]; });
+    var inside = {};
+    ids.forEach(function (id) { inside[id] = true; });
+    var back = {}, visit = {};
+    function walk(id) {
+      visit[id] = 1;
+      graph.deps[id].forEach(function (dep) {
+        if (!inside[dep.id]) return;
+        if (visit[dep.id] === 1) back[dep.id + "\u0000" + id] = true;
+        else if (!visit[dep.id]) walk(dep.id);
+      });
+      visit[id] = 2;
+    }
+    ids.forEach(function (id) { if (!visit[id]) walk(id); });
+    var layer = {};
+    function level(id) {
+      if (layer[id] != null) return layer[id];
+      var best = 0;
+      graph.deps[id].forEach(function (dep) {
+        if (inside[dep.id] && !back[dep.id + "\u0000" + id]) best = Math.max(best, level(dep.id) + 1);
+      });
+      layer[id] = best;
+      return best;
+    }
+    var layers = [];
+    ids.forEach(function (id) { var l = level(id); (layers[l] = layers[l] || []).push(id); });
+    layers = layers.filter(Boolean);
+    layers.forEach(function (group) {
+      group.sort(function (a, b) { return byLabel(graph.nodes[a], graph.nodes[b]); });
+    });
+    var place = {};
+    function index() {
+      layers.forEach(function (group) { group.forEach(function (id, i) { place[id] = i - (group.length - 1) / 2; }); });
+    }
+    function order(group, links) {
+      var score = {};
+      group.forEach(function (id) {
+        var near = links[id].filter(function (link) { return inside[link.id]; });
+        score[id] = near.length ?
+          near.reduce(function (sum, link) { return sum + place[link.id]; }, 0) / near.length : place[id];
+      });
+      group.sort(function (a, b) { return score[a] - score[b]; });
+    }
+    index();
+    for (var sweep = 0; sweep < 4; sweep++) {
+      for (var l = 1; l < layers.length; l++) { order(layers[l], graph.deps); index(); }
+      for (var r = layers.length - 2; r >= 0; r--) { order(layers[r], graph.users); index(); }
+    }
+    var tallest = Math.max.apply(null, layers.map(function (group) { return group.length; }).concat([1]));
+    var items = {};
+    layers.forEach(function (group, l) {
+      group.forEach(function (id) {
+        items[id] = { id: id, node: graph.nodes[id], x: l * MAP_SIZE.along,
+                      y: (place[id] + (tallest - 1) / 2) * MAP_SIZE.across };
+      });
+    });
+    var edges = [];
+    DATA.graph.edges.forEach(function (edge) {
+      if (items[edge.from] && items[edge.to]) {
+        edges.push({ from: items[edge.from], to: items[edge.to], kind: edge.kind,
+                     back: !!back[edge.from + "\u0000" + edge.to] });
+      }
+    });
+    return { items: items, edges: edges, direction: "lr", min: 0.6, anchor: "start",
+             width: Math.max(layers.length - 1, 0) * MAP_SIZE.along + MAP_W,
+             height: (tallest - 1) * MAP_SIZE.across + MAP_H };
+  }
+
+  function showMap(refit) {
+    state.mode = "map";
+    state.current = null;
+    updateToolbar();
+    var focus = state.focus && graph.nodes[state.focus] ? state.focus : null;
+    var up = focus ? closure(focus, graph.deps) : null, down = focus ? closure(focus, graph.users) : null;
+    var chain = null;
+    if (focus && state.chainOnly) {
+      chain = {};
+      Object.keys(up).concat(Object.keys(down)).forEach(function (id) { chain[id] = true; });
+    }
+    var shape = state.layout = mapLayout(chain);
+    viewport.replaceChildren();
+    var lines = svgEl("g"), boxes = svgEl("g");
+    shape.edges.forEach(function (edge) {
+      var lit = focus && ((up[edge.from.id] && up[edge.to.id]) || (down[edge.from.id] && down[edge.to.id]));
+      var x1 = edge.from.x + MAP_W, y1 = edge.from.y + MAP_H / 2, x2 = edge.to.x - 3, y2 = edge.to.y + MAP_H / 2;
+      var bend = Math.max(40, Math.abs(x2 - x1) / 2);
+      var path = svgEl("path", {
+        class: "edge " + edge.kind + (edge.back ? " back" : "") + (lit ? " hl" : focus ? " dim" : ""),
+        "marker-end": lit ? "url(#arrow-hl)" : "url(#arrow)",
+        d: "M" + x1 + "," + y1 + " C" + (x1 + bend) + "," + y1 + " " + (x2 - bend) + "," + y2 + " " + x2 + "," + y2 });
+      var verb = edge.kind === "reads" ? " is read by " : edge.kind === "uses" ? " is used by " : " is called by ";
+      path.append(svgEl("title", {}, edge.from.node.label + verb + edge.to.node.label +
+                                     (edge.back ? " (circular dependency)" : "")));
+      lines.append(path);
+    });
+    Object.keys(shape.items).forEach(function (id) {
+      var item = shape.items[id], node = item.node;
+      var kind = MAP_KINDS[node.kind] || "named";
+      var dim = focus && !up[id] && !down[id];
+      var group = svgEl("g", { class: "node kind-" + kind + (id === focus ? " selected" : "") + (dim ? " dim" : ""),
+                               transform: "translate(" + item.x + "," + item.y + ")", tabindex: "0", role: "button" });
+      group.append(svgEl("title", {}, node.label + " — " + node.what));
+      group.append(svgEl("rect", { class: "box", width: MAP_W, height: MAP_H, rx: 9 }));
+      group.append(svgEl("path", { class: "band",
+                                   d: "M9,0 A9,9 0 0 0 0,9 V" + (MAP_H - 9) + " A9,9 0 0 0 9," + MAP_H + " Z" }));
+      group.append(svgEl("text", { class: "label", x: 16, y: 21 }, cut(node.label, 29)));
+      var sub = node.kind === "attribute" ? "identity attribute · " + node.profile :
+        node.kind === "missing" ? "not found" : node.what;
+      group.append(svgEl("text", { class: "what", x: 16, y: 38 }, cut(sub, 34)));
+      group.addEventListener("click", function (event) { event.stopPropagation(); focusNode(id, false); });
+      group.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); focusNode(id, false); }
+      });
+      boxes.append(group);
+    });
+    viewport.append(lines, boxes);
+    $("crumb").replaceChildren("Map of the named transforms", el("small", { text: focus ?
+      "around " + graph.nodes[focus].label : Object.keys(shape.items).length + " box(es)" }));
+    if (refit) fit(); else applyZoom();
+  }
+
+  function focusNode(id, centre) {
+    var refit = state.mode !== "map" || state.chainOnly;
+    if (state.tab !== "map") setTab("map");
+    state.focus = id;
+    setHash("m/" + encodeURIComponent(id));
+    showMap(refit);
+    if (centre && !state.chainOnly) centreOn(id);
+    renderList();
+    renderMapDetails(id);
+  }
+
+  function centreOn(id) {
+    var item = state.layout.items && state.layout.items[id], box = svg.getBoundingClientRect();
+    if (!item || !box.width) return;
+    zoom.k = Math.max(zoom.k, 0.8);
+    zoom.x = box.width / 2 - (item.x + MAP_W / 2) * zoom.k;
+    zoom.y = box.height / 2 - (item.y + MAP_H / 2) * zoom.k;
+    applyZoom();
+  }
+
+  function clearFocus() {
+    state.focus = null;
+    setHash("");
+    showMap(false);
+    renderList();
+    renderMapDetails(null);
+  }
+
+  // -- step diagrams: how one attribute or one transform computes its value --------------------------------
+
+  function openAttribute(attribute) {
+    var profile = DATA.profiles[attribute.profileIndex];
+    openSteps({ attribute: attribute, tree: attribute.tree, title: attribute.name, context: profile.name },
+              "a/" + encodeURIComponent(profile.name) + "/" + encodeURIComponent(attribute.name));
+  }
+
+  function openTransform(transform) {
+    openSteps({ transform: transform, tree: transform.tree, title: transform.name,
+                context: "steps of the named transform" }, "t/" + encodeURIComponent(transform.name));
+  }
+
+  function openSteps(current, hash) {
+    state.mode = "detail";
+    state.current = current;
+    state.collapsed = {};
+    state.selected = "0";
+    setHash(hash);
+    $("crumb").replaceChildren(current.title, el("small", { text: current.context }));
+    if (!state.chosen) state.direction = bestDirection(current.tree);
+    renderList();
+    renderSteps(true);
+    renderStepDetails(null);
+  }
+
+  // Inputs without inputs of their own get one place each, a step is centred on its inputs, and the
+  // result comes last: on the right (lr) or at the bottom (tb).
+  function stepLayout(root, direction) {
+    var nodes = [], leaves = 0, deepest = 0, size = SIZES[direction];
+    function walk(node, depth, id, parent) {
+      var item = { node: node, depth: depth, id: id, parent: parent, kids: [] };
+      nodes.push(item);
+      deepest = Math.max(deepest, depth);
+      var children = node.children || [];
+      if (children.length && !state.collapsed[id]) {
+        children.forEach(function (child, index) { item.kids.push(walk(child, depth + 1, id + "." + index, item)); });
+        item.place = (item.kids[0].place + item.kids[item.kids.length - 1].place) / 2;
+      } else {
+        item.place = leaves++;
+      }
+      return item;
+    }
+    walk(root, 0, "0", null);
+    nodes.forEach(function (item) {
+      var across = item.place * size.across, along = (deepest - item.depth) * size.along;
+      item.x = direction === "lr" ? along : across;
+      item.y = direction === "lr" ? across : along;
+    });
+    var span = (leaves - 1) * size.across, length = deepest * size.along;
+    return { nodes: nodes, direction: direction, min: 0.55, anchor: "end",
+             width: (direction === "lr" ? length : span) + W, height: (direction === "lr" ? span : length) + H };
+  }
+
+  function scaleFor(shape) {
+    var box = svg.getBoundingClientRect();
+    return Math.min((box.width - 2 * PAD) / shape.width, (box.height - 2 * PAD) / shape.height);
+  }
+
+  // The direction that shows the whole diagram larger (left to right when equal).
+  function bestDirection(tree) {
+    var lr = scaleFor(stepLayout(tree, "lr")), tb = scaleFor(stepLayout(tree, "tb"));
+    return tb > lr * 1.02 ? "tb" : "lr";
+  }
+
+  function renderSteps(refit) {
+    updateToolbar();
+    viewport.replaceChildren();
+    if (!state.current) return;
+    var lr = state.direction === "lr";
+    var shape = state.layout = stepLayout(state.current.tree, state.direction);
+    $("direction").textContent = lr ? "⇢ Left to right" : "⇣ Top to bottom";
+    var edges = svgEl("g"), boxes = svgEl("g");
+    shape.nodes.forEach(function (item) {
+      if (item.parent) {
+        var x1, y1, x2, y2, curve, label;
+        if (lr) {
+          x1 = item.x + W; y1 = item.y + H / 2; x2 = item.parent.x - 3; y2 = item.parent.y + H / 2;
+          curve = " C" + (x1 + x2) / 2 + "," + y1 + " " + (x1 + x2) / 2 + "," + y2 + " ";
+          label = { x: x1 + 8, y: y1 - 7 };
+        } else {
+          x1 = item.x + W / 2; y1 = item.y + H; x2 = item.parent.x + W / 2; y2 = item.parent.y - 3;
+          curve = " C" + x1 + "," + (y1 + y2) / 2 + " " + x2 + "," + (y1 + y2) / 2 + " ";
+          label = { x: x1 + 7, y: y1 + 16 };
+        }
+        edges.append(svgEl("path", { class: "edge", "marker-end": "url(#arrow)",
+                                     d: "M" + x1 + "," + y1 + curve + x2 + "," + y2 }));
+        if (item.node.role) {
+          edges.append(svgEl("text", { class: "role", x: label.x, y: label.y }, cut(item.node.role, 16)));
+        }
+      }
+      boxes.append(drawStep(item, lr));
+    });
+    viewport.append(edges, boxes);
+    if (refit) fit(); else applyZoom();
+  }
+
+  function drawStep(item, lr) {
+    var node = item.node, kind = KINDS[node.kind] ? node.kind : "transform";
+    var group = svgEl("g", { class: "node kind-" + kind + (item.id === state.selected ? " selected" : ""),
+                             transform: "translate(" + item.x + "," + item.y + ")", tabindex: "0", role: "button" });
+    group.append(svgEl("title", {}, (node.role ? node.role + ": " : "") + node.label +
+                                    (node.what ? " — " + node.what : "")));
+    group.append(svgEl("rect", { class: "box", width: W, height: H, rx: 9 }));
+    group.append(svgEl("path", { class: "band", d: "M9,0 A9,9 0 0 0 0,9 V" + (H - 9) + " A9,9 0 0 0 9," + H + " Z" }));
+    group.append(svgEl("text", { class: "label", x: 18, y: 22 }, cut(node.label, 36)));
+    wrap(node.what || KINDS[kind][0], 46, 2).forEach(function (line, index) {
+      group.append(svgEl("text", { class: "what", x: 18, y: 41 + index * 15 }, line));
+    });
+    group.addEventListener("click", function (event) { event.stopPropagation(); selectStep(item); });
+    group.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectStep(item); }
+    });
+    var count = (node.children || []).length;
+    if (count) {
+      var folded = !!state.collapsed[item.id];
+      var toggle = svgEl("g", { class: "toggle",
+                                transform: lr ? "translate(0," + H / 2 + ")" : "translate(" + W / 2 + ",0)" });
+      toggle.append(svgEl("title", {}, folded ? "Show its " + count + " input(s)" : "Fold its inputs"));
+      toggle.append(svgEl("circle", { r: 9 }));
+      toggle.append(svgEl("text", { y: 4.5 }, folded ? "+" : "−"));
+      toggle.addEventListener("click", function (event) {
+        event.stopPropagation();
+        state.collapsed[item.id] = !folded;
+        renderSteps(false);
+      });
+      group.append(toggle);
+    }
+    return group;
+  }
+
+  function selectStep(item) {
+    state.selected = item.id;
+    renderSteps(false);
+    renderStepDetails(item);
+  }
+
+  function foldAll(fold) {
+    state.collapsed = {};
+    if (fold && state.layout && state.layout.nodes) {
+      state.layout.nodes.forEach(function (item) {
+        if (item.depth >= 1 && (item.node.children || []).length) state.collapsed[item.id] = true;
+      });
+    }
+    renderSteps(true);
+  }
+
+  // -- zoom and pan -----------------------------------------------------------------------------------------
+
+  function applyZoom() {
+    viewport.setAttribute("transform", "translate(" + zoom.x + "," + zoom.y + ") scale(" + zoom.k + ")");
+  }
+
+  // Never smaller than the shape's readable minimum unless *all* is asked (the Fit button). Centred when
+  // it fits; otherwise one end stays in view: the result of a step diagram, the start of the map.
+  function fit(all) {
+    var shape = state.layout, box = svg.getBoundingClientRect();
+    if (!shape || !box.width) return;
+    zoom.k = Math.max(all === true ? 0.1 : shape.min, Math.min(1.1, scaleFor(shape)));
+    var width = shape.width * zoom.k, height = shape.height * zoom.k, end = shape.anchor === "end";
+    zoom.x = width <= box.width - 2 * PAD ? (box.width - width) / 2 :
+      end && shape.direction === "lr" ? box.width - PAD - width : PAD;
+    zoom.y = height <= box.height - 2 * PAD ? (box.height - height) / 2 :
+      end && shape.direction === "tb" ? box.height - PAD - height : PAD;
+    applyZoom();
+  }
+
+  function zoomAt(factor, px, py) {
+    var k = Math.max(0.1, Math.min(3, zoom.k * factor));
+    zoom.x = px - (px - zoom.x) * k / zoom.k;
+    zoom.y = py - (py - zoom.y) * k / zoom.k;
+    zoom.k = k;
+    applyZoom();
+  }
+
+  svg.addEventListener("wheel", function (event) {
+    event.preventDefault();
+    var box = svg.getBoundingClientRect();
+    zoomAt(Math.exp(-event.deltaY * 0.0015), event.clientX - box.left, event.clientY - box.top);
+  }, { passive: false });
+
+  var drag = null;
+  svg.addEventListener("pointerdown", function (event) {
+    if (event.target.closest && event.target.closest(".node")) return;
+    drag = { x: event.clientX - zoom.x, y: event.clientY - zoom.y, startX: event.clientX, startY: event.clientY };
+    svg.setPointerCapture(event.pointerId);
+    svg.classList.add("panning");
+  });
+  svg.addEventListener("pointermove", function (event) {
+    if (!drag) return;
+    zoom.x = event.clientX - drag.x;
+    zoom.y = event.clientY - drag.y;
+    applyZoom();
+  });
+  svg.addEventListener("pointerup", function (event) {
+    var click = drag && Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) < 4;
+    drag = null;
+    svg.classList.remove("panning");
+    // A click on an empty part of the map clears the selection.
+    if (click && state.mode === "map" && state.focus && !state.chainOnly) clearFocus();
+  });
+  svg.addEventListener("pointercancel", function () { drag = null; svg.classList.remove("panning"); });
+
+  function zoomCentre(factor) {
+    var box = svg.getBoundingClientRect();
+    zoomAt(factor, box.width / 2, box.height / 2);
+  }
+
+  // -- details panel ------------------------------------------------------------------------------------------
+
+  function field(box, title, value) {
+    if (value == null || value === "" || (Array.isArray(value) && !value.length)) return;
+    var content = value instanceof Node ? (value.tagName === "DD" ? value : el("dd", {}, value)) :
+      el("dd", { text: value });
+    box.append(el("dl", { class: "field" }, el("dt", { text: title }), content));
+  }
+
+  function links(items, label, action) {
+    if (!items.length) return null;
+    var wrap = el("div", { class: "links" });
+    items.forEach(function (item) {
+      wrap.append(el("a", { tabindex: "0", text: label(item), onclick: function () { action(item); },
+                            onkeydown: function (event) { if (event.key === "Enter") action(item); } }));
+    });
+    return wrap;
+  }
+
+  function header(box, kind, title) {
+    box.append(el("span", { class: "kindtag", text: KINDS[kind][0],
+                            style: "background:" + KINDS[kind][1] + ";color:#fff" }));
+    box.append(el("h2", { text: title }));
+  }
+
+  function nodeLinks(list, kind) {
+    var found = list.filter(function (link) { return link.kind === kind; })
+      .map(function (link) { return graph.nodes[link.id]; });
+    return links(found, function (node) {
+      return node.kind === "attribute" ? node.label + " (" + node.profile + ")" : node.label;
+    }, function (node) { focusNode(node.id, true); });
+  }
+
+  function renderMapDetails(id) {
+    var box = $("details");
+    box.replaceChildren();
+    if (!id) {
+      box.append(el("h2", { text: "How the named transforms depend on each other" }));
+      box.append(el("p", { text: "Each box is a named transform, or an identity attribute of a profile that links " +
+        "transforms. A box comes after what it depends on: the transforms it calls, and the identity attributes it " +
+        "reads, which other transforms compute." }));
+      box.append(el("p", { text: "Click a box to light up everything it depends on and everything that depends " +
+        "on it, then 'Only its chain' to see nothing else." }));
+      return;
+    }
+    var node = graph.nodes[id];
+    if (node.kind === "attribute") {
+      header(box, "attribute", node.label);
+      var attribute = attributeOf(node);
+      field(box, "Identity profile", node.profile);
+      field(box, "Mapping", node.mapping);
+      if (attribute) field(box, "In plain words", attribute.explanation);
+      field(box, "Uses the named transforms", nodeLinks(graph.deps[id], "uses"));
+      field(box, "Read by the named transforms", nodeLinks(graph.users[id], "reads"));
+      if (attribute) {
+        box.append(el("button", { text: "How it is computed, step by step", onclick: function () {
+          setTab("attributes");
+          openAttribute(attribute);
+        } }));
+      }
+      return;
+    }
+    header(box, node.kind === "missing" ? "missing" : "named", node.label);
+    field(box, "What it does", node.what);
+    field(box, "Calls", nodeLinks(graph.deps[id], "calls"));
+    field(box, "Reads the identity attributes", nodeLinks(graph.deps[id], "reads"));
+    field(box, "Called by", nodeLinks(graph.users[id], "calls"));
+    field(box, "Used by the identity attributes", nodeLinks(graph.users[id], "uses"));
+    field(box, "Used in", node.usedIn.length ? node.usedIn.join(", ") : "no identity profile");
+    var up = Object.keys(closure(id, graph.deps)).length - 1, down = Object.keys(closure(id, graph.users)).length - 1;
+    field(box, "Chain", up + " box(es) it depends on and " + down + " that depend on it, directly or not");
+    var transform = transforms[node.label];
+    if (transform && transform.type) {
+      box.append(el("button", { text: "Show its steps", onclick: function () { openTransform(transform); } }));
+      field(box, "Definition (JSON)", el("pre", { text: transform.definition }));
+    }
+  }
+
+  function renderStepDetails(item) {
+    var box = $("details");
+    box.replaceChildren();
+    var current = state.current;
+    var node = item ? item.node : current.tree, root = !item || item.id === "0";
+    var kind = KINDS[node.kind] ? node.kind : "transform";
+    header(box, kind, node.label);
+    var onMap = null;
+    if (root && current.attribute) {
+      var attribute = current.attribute, profile = DATA.profiles[attribute.profileIndex];
+      field(box, "Identity profile", profile.name + (profile.source ? " (authoritative source " + profile.source + ")" : ""));
+      field(box, "Display name", attribute.displayName);
+      field(box, "Mapping", attribute.mapping);
+      field(box, "In plain words", attribute.explanation);
+      field(box, "Also used in", attribute.usedIn);
+      if (attribute.checks.length) {
+        var list = el("ul");
+        attribute.checks.forEach(function (check) {
+          list.append(el("li", { class: "check-" + check.severity,
+                                 text: check.severity + ": " + check.check + ". " + check.details }));
+        });
+        field(box, "Points to check", list);
+      }
+      onMap = "a:" + profile.name + "/" + attribute.name;
+    } else {
+      if (!root) field(box, "Place in the next step", node.role);
+      field(box, "What it does", node.what);
+      field(box, "Options", node.details ? node.details.split("; ").join("\n") : "");
+      if (root && current.transform) onMap = "t:" + current.transform.name;
+      else if (kind === "named" || kind === "missing") onMap = "t:" + node.label;
+    }
+    if (onMap && graph.nodes[onMap]) {
+      box.append(el("button", { text: "See it on the transform map", onclick: function () { focusNode(onMap, true); } }));
+    }
+  }
+
+  // -- SVG download -------------------------------------------------------------------------------------------
+
+  function download() {
+    var shape = state.layout;
+    if (!shape) return;
+    var width = shape.width + 2 * PAD, height = shape.height + 2 * PAD;
+    var copy = svg.cloneNode(true);
+    copy.setAttribute("width", width);
+    copy.setAttribute("height", height);
+    copy.setAttribute("viewBox", "0 0 " + width + " " + height);
+    copy.removeAttribute("class");
+    var content = copy.querySelector("#viewport");
+    content.setAttribute("transform", "translate(" + PAD + "," + PAD + ")");
+    copy.insertBefore(svgEl("rect", { width: width, height: height, fill: "#ffffff" }), content);
+    Array.prototype.forEach.call(copy.querySelectorAll(".toggle"), function (toggle) { toggle.remove(); });
+    var text = new XMLSerializer().serializeToString(copy);
+    var url = URL.createObjectURL(new Blob([text], { type: "image/svg+xml" }));
+    var name = state.mode === "map" ? "transform-map" + (state.focus ? "-" + graph.nodes[state.focus].label : "") :
+      state.current.context + "-" + state.current.title;
+    var link = el("a", { href: url, download: slug(name) + ".svg" });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }
+
+  // -- start ----------------------------------------------------------------------------------------------------
+
+  $("tab-map").addEventListener("click", function () {
+    setTab("map");
+    if (state.mode !== "map") { showMap(true); renderMapDetails(state.focus); }
+  });
+  $("tab-attributes").addEventListener("click", function () { setTab("attributes"); });
+  $("search").addEventListener("input", function (event) { state.query = event.target.value; renderList(); });
+  $("profile").addEventListener("change", function (event) { state.profile = event.target.value; renderList(); });
+  $("back").addEventListener("click", function () { showMap(true); renderMapDetails(state.focus); });
+  $("chain").addEventListener("click", function () {
+    state.chainOnly = !state.chainOnly;
+    showMap(true);
+  });
+  $("zoom-in").addEventListener("click", function () { zoomCentre(1.25); });
+  $("zoom-out").addEventListener("click", function () { zoomCentre(0.8); });
+  $("fit").addEventListener("click", function () { fit(true); });
+  $("expand").addEventListener("click", function () { foldAll(false); });
+  $("collapse").addEventListener("click", function () { foldAll(true); });
+  $("direction").addEventListener("click", function () {
+    state.direction = state.direction === "lr" ? "tb" : "lr";
+    state.chosen = true;
+    renderSteps(true);
+  });
+  $("download").addEventListener("click", download);
+  var resizing = null;
+  window.addEventListener("resize", function () { clearTimeout(resizing); resizing = setTimeout(fit, 150); });
+
+  function openFromHash() {
+    var parts = (location.hash || "").replace(/^#/, "").split("/").map(function (part) {
+      try { return decodeURIComponent(part); } catch (e) { return ""; }
+    });
+    var id = parts.slice(1).join("/");
+    if (parts[0] === "m" && graph.nodes[id]) {
+      focusNode(id, true);
+      return true;
+    }
+    if (parts[0] === "a" && attributes[parts[1] + "\u0000" + parts[2]]) {
+      setTab("attributes");
+      openAttribute(attributes[parts[1] + "\u0000" + parts[2]]);
+      return true;
+    }
+    if (parts[0] === "t" && transforms[parts[1]]) {
+      openTransform(transforms[parts[1]]);
+      return true;
+    }
+    return false;
+  }
+
+  renderHeader();
+  renderList();
+  if (!openFromHash()) {
+    if (DATA.graph.nodes.length) {
+      showMap(true);
+      renderMapDetails(null);
+    } else {
+      setTab("attributes");
+      var first = DATA.profiles.length && DATA.profiles[0].attributes[0];
+      if (first) openAttribute(first);
+    }
+  }
+})();
+</script>
+</body>
+</html>

@@ -6,10 +6,11 @@ the [issues](https://github.com/NDIAYE-baoussou/isc-reporter/issues).
 
 ## Done
 
-- **Reports**: search, certification campaigns, identity attribute changes, identity profile
-  mappings with where each attribute is used, leavers who still have access.
+- **Reports**: search, certification campaigns, identity attribute changes, identity attribute
+  mappings with where each attribute is used and how the named transforms depend on each other
+  (trees and an interactive map), leavers who still have access.
 - **Change impact**: source migration analysis with draft JSON and the role, segment and
-  correlation criteria it affects; attribute synchronization forecast.
+  correlation criteria it affects; attribute synchronization forecast; role enablement impact.
 - **Trust**: read-only by design, a demo of every command on fictional data, tests that need no
   tenant, continuous integration, automated releases to PyPI, a security policy, and the
   permissions of each command.
@@ -17,7 +18,7 @@ the [issues](https://github.com/NDIAYE-baoussou/isc-reporter/issues).
 ## Next: findings and JSON output
 
 - One format for every finding, whichever command produces it: check id, severity, resource,
-  explanation, evidence, recommendation. `identity-profiles`, `migration` and `analyze-before-sync` already
+  explanation, evidence, recommendation. `mappings`, `migration` and `analyze-before-sync` already
   produce checks; they would share it.
 - `--format json`, so results can feed scripts and other tools, and a short summary in the
   terminal.

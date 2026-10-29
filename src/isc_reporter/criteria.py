@@ -150,10 +150,10 @@ def old_source_attributes(objects: Objects, old) -> list[tuple[str, str]]:
     correlation of the old source; they need a counterpart in the new source too."""
     found = []
     for role in objects.roles or []:
-        for leaf in _leaves((role.get("membership") or {}).get("criteria")):
+        for leaf in leaves((role.get("membership") or {}).get("criteria")):
             key = leaf.get("key") or {}
             if str(key.get("type", "")).upper() == "ACCOUNT" and old.id and key.get("sourceId") == old.id:
-                found.append((_name(key), f"role criteria: {role.get('name', '')}"))
+                found.append((key_attribute(key), f"role criteria: {role.get('name', '')}"))
     for source in objects.sources or []:
         account = (source.get("managerCorrelationMapping") or {}).get("accountAttributeName")
         if account and _is(source, old):
@@ -205,10 +205,10 @@ def checks(rows: list[dict], notes: list[str]) -> list[tuple[str, str, str, str]
 def _criteria_rows(kind, name, enabled, criteria, impacted, old, new, attributes, names) -> list[dict]:
     full = criteria_text(criteria, names)
     rows = []
-    for leaf in _leaves(criteria):
+    for leaf in leaves(criteria):
         key = leaf.get("key") or {}
         key_type = str(key.get("type", "")).upper()
-        attribute = _name(key)
+        attribute = key_attribute(key)
         value = leaf.get("stringValue", "")
         if key_type == "IDENTITY":
             reason = _lookup(impacted, attribute)
@@ -317,18 +317,18 @@ def _lookup(impacted: dict[str, str], attribute: str) -> str | None:
 # -- readable criteria ------------------------------------------------------------------------
 
 
-def _name(key: dict) -> str:
+def key_attribute(key: dict) -> str:
     prop = str(key.get("property") or "")
     return prop[len(PREFIX):] if prop.startswith(PREFIX) else prop
 
 
-def _leaves(node):
+def leaves(node):
     """The leaf criteria (one attribute, one operation, one value) of a role or dimension."""
     if not isinstance(node, dict):
         return
     if node.get("children"):
         for child in node["children"]:
-            yield from _leaves(child)
+            yield from leaves(child)
     elif node.get("key"):
         yield node
 
@@ -338,9 +338,9 @@ def _leaf_text(leaf: dict, names: dict[str, str]) -> str:
     key_type = str(key.get("type", "")).upper()
     if key_type in ("ACCOUNT", "ENTITLEMENT"):
         source = names.get(key.get("sourceId") or "", key.get("sourceId") or "?")
-        subject = f"{'entitlement ' if key_type == 'ENTITLEMENT' else ''}{source}.{_name(key)}"
+        subject = f"{'entitlement ' if key_type == 'ENTITLEMENT' else ''}{source}.{key_attribute(key)}"
     else:
-        subject = f"identity.{_name(key)}"
+        subject = f"identity.{key_attribute(key)}"
     return f'{subject} {str(leaf.get("operation", "")).upper()} "{leaf.get("stringValue", "")}"'
 
 

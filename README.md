@@ -22,11 +22,11 @@ change would do before you make it. It only reads from the tenant.
   on one line each, certification progress and reviewer workload, attribute changes with their old
   and new values. *For IAM operations, managers and auditors.*
 - **Understand the configuration.** How every identity attribute is computed, in plain words,
-  where else it is used (transforms, provisioning policies), and checks for likely mistakes.
-  *For ISC engineers and architects.*
-- **Change safely.** Before replacing a source or enabling attribute synchronization, see what
-  would be impacted or updated, with draft JSON to review. *For implementation teams and
-  consultants.*
+  where else it is used (transforms, provisioning policies), how the named transforms depend on
+  each other, and checks for likely mistakes. *For ISC engineers and architects.*
+- **Change safely.** Before replacing a source, enabling attribute synchronization or enabling a
+  role, see what would be impacted, updated or provisioned, with draft JSON to review. *For
+  implementation teams and consultants.*
 - **Keep audit evidence.** Every certification decision with its reviewer comment, attribute
   change history, and the query behind each report, in files you can archive. *For audit and
   compliance.*
@@ -38,10 +38,11 @@ change would do before you make it. It only reads from the tenant.
 | `search` | Any search (identities, access profiles, roles, entitlements, events, account activities, workflows) with **one line per object**: an identity's roles, access profiles, entitlements and accounts are consolidated instead of repeated on many lines. | xlsx, pdf, csv | Beta |
 | `campaigns` | Certification campaign dashboard: progress, approved / revoked / pending decisions by access type, reviewer workload, overdue certifications, and every reviewed item for audit evidence. | xlsx, pdf | Beta |
 | `changes` | Identity attribute changes **with old and new values** over a period (e.g. department and manager changes of the last 30 days), which ISC search cannot show. | xlsx, pdf, csv | Beta |
-| `identity-profiles` | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, where else the attribute is used, and checks for likely mistakes. | xlsx, pdf | Beta |
+| `mappings` | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, where else the attribute is used, and checks for likely mistakes; how the named transforms depend on each other, as trees and as an interactive map. | xlsx, pdf, interactive html | Beta |
 | `migration` | Impact of replacing a source (typically a new HR system) on identity profiles, transforms and attribute mappings, before / after, with draft JSON for the new objects, and the role, segment and correlation criteria that use the impacted attributes. | xlsx, pdf, csv, JSON drafts | Beta |
 | `analyze-before-sync` | Forecast of the updates ISC could send to a target system if attribute synchronization is enabled on a source: values added, changed or cleared, per attribute and per account. | xlsx, pdf, csv | Experimental |
 | `leavers` | Identities in a leaver lifecycle state that still have enabled accounts, and for each account whether the lifecycle state should have disabled it (a failure to fix) or does not cover it (a configuration gap). | xlsx, pdf, csv | Beta |
+| `role-impact` | Before enabling a role: the identities its membership criteria select, the entitlements ISC would provision to them and the accounts it would create, who would lose the role, and who already holds its access without matching. Works on a draft role with new criteria too. | xlsx, pdf, csv | Experimental |
 | `demo` | Every report above, built from fictional data, without a tenant. | all of the above | |
 
 **Beta**: documented and covered by automated tests; needs validation on more real tenants.
@@ -106,14 +107,16 @@ Credentials are read from the first of:
 
 Every command writes its reports to `outputs/` (change with `--output-dir`, or name the file with
 `-o`) and its log to `logs/` (`--log-dir ""` turns it off), and accepts `--format` (`xlsx`, `pdf`,
-and `csv` where it makes sense). `isc-reporter <command> --help` lists every option.
+`csv` where it makes sense, and `html` for `mappings`). `isc-reporter <command> --help` lists every
+option.
 
 ## Safety, permissions and privacy
 
 - **Read-only.** isc-reporter only reads from your tenant: it never creates, changes or deletes
-  anything. `migration` writes draft JSON to local files for you to review, and
-  `analyze-before-sync` forecasts updates without sending any.
-- **Offline where it can be.** `demo`, `identity-profiles --from` and `migration --from` use fictional data
+  anything. `migration` writes draft JSON to local files for you to review, `analyze-before-sync`
+  forecasts updates without sending any, and `role-impact` evaluates a role's criteria without
+  assigning it.
+- **Offline where it can be.** `demo`, `mappings --from` and `migration --from` use fictional data
   or exported JSON files and never connect.
 - **Least privilege.** [docs/permissions.md](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/docs/permissions.md)
   lists the endpoints, scopes and user levels each command needs, so the token can have no more
@@ -191,15 +194,17 @@ shown as names. Attributes that change on most days (typically computed from tod
 transform) are flagged, as they fire an attribute change event every day. One history call is
 made per modified identity: narrow large tenants with `--query` or `--max-identities`.
 
-### Identity profile mappings
+### Identity attribute mappings
 
-![Identity profile mappings](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/profiles.png)
+![Identity attribute mappings](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/profiles.png)
 
 ```bash
-isc-reporter identity-profiles
-isc-reporter identity-profiles --profile Employees --profile Contractors
-isc-reporter identity-profiles --from exports/            # offline, from exported JSON
+isc-reporter mappings
+isc-reporter mappings --profile Employees --profile Contractors
+isc-reporter mappings --from exports/            # offline, from exported JSON
 ```
+
+(`identity-profiles` and `profiles`, its former names, still work with a warning.)
 
 One sheet per profile with, for every identity attribute, the mapping kind, a plain-language
 explanation (*"Value of 'hireDate' from HR System, converted by the transform 'Date to ISO8601'
@@ -216,6 +221,37 @@ policies that use it, and which sources) and *Usage detail* (one line per use). 
 policies are read from every source of the tenant (a source that cannot be read is skipped with a
 warning), or from a source export given to `--from`. Identity attributes used in rules (code)
 cannot be detected.
+
+**How the named transforms depend on each other.** The *Transform dependencies* sheet draws one
+tree per identity attribute that uses a named transform: below it, what it depends on, down to the
+last transform. Only named transforms and the identity attributes linking them appear, not what
+happens inside each transform. A transform *calls* another one; an identity attribute *uses* a
+transform; a transform *reads* an identity attribute, itself computed by other transforms. The
+named transforms that nothing uses come last. Each tree folds with the + and - buttons of Excel,
+and the PDF has the same trees.
+
+```text
+email                              identity attribute (Employees, inline transform)
+└─ uses: Build email               lower: converts to lower case
+   ├─ reads: firstname (Employees) identity attribute (Employees, named transform)
+   │  └─ uses: Normalize name      normalizeNames: normalizes person names
+   │     └─ calls: Clean name      trim: removes surrounding spaces
+   │        └─ calls: Remove accents   decomposeDiacriticalMarks: removes accents
+   └─ reads: lastname (Employees)  identity attribute (Employees, named transform)
+      └─ ...
+```
+
+The *Transforms* sheet lists every named transform, used or not, with the transforms it calls,
+those that call it, what it depends on and its definition.
+
+`mappings.html` shows the same as an interactive map, in any browser and without internet access:
+every named transform and the identity attributes that link them, each one after what it depends
+on. Click a transform (or find it with the search) to light up everything it depends on and
+everything that depends on it, and *Only its chain* to see nothing else; the panel lists what it
+calls, what calls it, the attributes it reads and uses it, and its definition. From there, *Show its
+steps* and the *Attribute details* tab draw how one transform or one identity attribute computes
+its value, step by step down to the account attributes. Zoom, move, and save any diagram as an SVG
+image for a design document. `--format` chooses the files (`xlsx pdf html` by default).
 
 ### Source migration analysis
 
@@ -292,6 +328,35 @@ ISO 8601, dd/MM/yyyy or yyyyMMdd) the report shows the days since leaving, and w
 accounts still enabled after that many days. Sheets: *Dashboard*, *Leavers with access*, *Enabled
 accounts* (privileged first), *By source*, *Lifecycle states* (their account actions) and
 *Settings*.
+
+### Before enabling a role
+
+```bash
+isc-reporter role-impact "Finance Analyst"
+isc-reporter role-impact "Finance Analyst" --query 'attributes.cloudLifecycleState:active'
+isc-reporter role-impact --from finance-analyst-draft.json      # a draft with new criteria
+```
+
+Enabling a role assigns it to every identity its membership criteria select, and ISC provisions
+its entitlements to them, creating accounts where needed. The command changes nothing: it reads
+the role, the entitlements of its access profiles and its own, every identity (or those matching
+`--query`) with its access and accounts, and the accounts of the sources that account criteria
+read, then evaluates the criteria for each identity. With `--from`, the role comes from a JSON
+file (as the roles API returns it, or a configuration export with the role name given) so that new
+criteria can be tested before they are saved.
+
+Each identity concerned gets an outcome: *Gets the role and new access* (the entitlements to
+provision, with *new account* when it has none on the source), *Gets the role, access already
+held*, *Already has the role*, *Loses the role* (assigned by the criteria, no longer matches them),
+*Has the role outside the criteria* (requested), and *Has the access without the role* (holds all
+of it without matching: the criteria may be too narrow). Sheets: *Dashboard*, *Identities*,
+*Provisioning* (one line per entitlement to provision, privileged first), *Entitlements* (who
+holds each one), *By source*, *Role* (its criteria in plain text).
+
+The criteria are evaluated by the command, as ISC is expected to: values compared ignoring case, a
+multi-valued attribute matching when one of its values does. On a role already assigned by its
+criteria, few *Loses the role* and *Gets the role* lines confirm that the evaluation matches the
+tenant. The criteria of dimensions are not analysed.
 
 ## Roadmap and contributing
 

@@ -1,6 +1,7 @@
-"""Document identity profile mappings: for each identity attribute, where its value comes from
-(source and account attribute), which transforms it goes through, in plain words, plus a
-summary with statistics and a list of points to check.
+"""Document the identity attribute mappings of identity profiles: for each identity attribute, where
+its value comes from (source and account attribute), which transforms it goes through, in plain
+words, how the named transforms depend on each other, plus a summary with statistics and a list of
+points to check.
 
 Profiles come from the tenant or from exported JSON files (a profile, a list of profiles, or
 a SailPoint configuration export); transform exports are read the same way and used to
@@ -16,9 +17,10 @@ import os
 from collections import Counter
 from dataclasses import dataclass, field
 
-from isc_reporter import attribute_usage, dashboard
+from isc_reporter import attribute_usage, dashboard, transform_graph, transform_tree
 from isc_reporter.api import error_message
 from isc_reporter.errors import UsageError
+from isc_reporter.transform_tree import describe_type
 
 log = logging.getLogger("isc_reporter")
 
@@ -56,32 +58,6 @@ KINDS = {
     "identityAttribute": ("Identity attribute", "EDEDED", "Copied from another attribute of the identity."),
     "rule": ("Rule", "FCE4D6", "A cloud rule (Java/BeanShell code deployed by SailPoint) computes it."),
     "": ("Not mapped", "F8CBAD", "No mapping is configured."),
-}
-
-# What common transform types do, for people who do not know them by heart.
-TRANSFORM_TYPES = {
-    "accountAttribute": "reads an account attribute",
-    "base64Decode": "decodes Base64", "base64Encode": "encodes in Base64",
-    "concat": "joins several values", "conditional": "chooses between two values",
-    "dateCompare": "compares two dates", "dateFormat": "changes a date format",
-    "dateMath": "adds or subtracts time from a date",
-    "decomposeDiacriticalMarks": "removes accents", "displayName": "builds a display name",
-    "e164phone": "formats a phone number (E.164)", "firstValid": "takes the first non-empty value",
-    "generateRandomString": "generates a random string",
-    "getEndOfString": "takes the end of a string",
-    "getReferenceIdentityAttribute": "reads an attribute of another identity (e.g. the manager)",
-    "identityAttribute": "reads another identity attribute", "indexOf": "finds text in a string",
-    "iso3166": "converts a country code", "lastIndexOf": "finds text from the end of a string",
-    "leftPad": "pads on the left", "lookup": "translates values with a table",
-    "lower": "converts to lower case", "normalizeNames": "normalizes person names",
-    "randomAlphaNumeric": "generates a random alphanumeric value",
-    "randomNumeric": "generates a random number", "reference": "calls a named transform",
-    "replace": "replaces text (regular expression)", "replaceAll": "replaces text (table)",
-    "rfc5646": "converts a language code", "rightPad": "pads on the right",
-    "rule": "runs a rule", "split": "splits text and keeps one part",
-    "static": "returns a fixed value or a Velocity expression", "substring": "takes part of a string",
-    "trim": "removes surrounding spaces", "upper": "converts to upper case",
-    "usernameGenerator": "generates a unique username", "uuid": "generates a unique id",
 }
 
 # Display names of the standard attributes, used when reading exported files.
@@ -245,10 +221,6 @@ def kind_of(definition: dict) -> str:
     return kind if kind in KINDS else "inline"
 
 
-def describe_type(kind: str) -> str:
-    return TRANSFORM_TYPES.get(kind, f"'{kind}' transform")
-
-
 def explain(definition: dict, walk: _Walk) -> str:
     """The mapping in one plain sentence."""
     if not definition:
@@ -310,12 +282,16 @@ def mapping_rows(profile: dict, transforms: dict[str, dict] | None = None,
                            "computed by a transform."))
         if kind == "static":
             checks.append((INFO, "Static value", "Every identity of the profile gets the same value."))
+        explanation = explain(definition, walk)
+        tree = transform_tree.Node(name, explanation, kind=transform_tree.ATTRIBUTE)
+        if definition:
+            tree.children.append(transform_tree.build(definition, transforms))
         rows.append({
             "identity_attribute": name,
             "display_name": display_names.get(name) or STANDARD_NAMES.get(name, ""),
             "kind": kind,
             "mapping": KINDS[kind][0],
-            "explanation": explain(definition, walk),
+            "explanation": explanation,
             "sources": "\n".join(sources),
             "source_attributes": "\n".join(attribute if len(sources) == 1 else f"{source}.{attribute}"
                                            for source, attribute in walk.leaves),
@@ -323,6 +299,7 @@ def mapping_rows(profile: dict, transforms: dict[str, dict] | None = None,
             "logic": logic,
             "leaves": list(walk.leaves),
             "checks": checks,
+            "tree": tree,
             "definition": json.dumps(definition, ensure_ascii=False, indent=1),
         })
     # Attributes filled exactly the same way are often a copy-paste mistake.
@@ -362,7 +339,7 @@ def profile_checks(profile: dict, rows: list[dict]) -> list[tuple[str, str, str,
 # -- rendering ------------------------------------------------------------------
 
 RESERVED_SHEETS = {"Dashboard", "Profiles", "Matrix", "Coverage", "Attribute usage", "Usage detail",
-                   "Transforms", "Checks", "Chart data", "Read me"}
+                   "Transforms", "Transform dependencies", "Checks", "Chart data", "Read me"}
 SEVERITY_FILLS = {WARNING: "F8CBAD", INFO: "DDEBF7"}
 # KINDS colours are pale cell backgrounds; charts use strong ones.
 CHART_COLOURS = {"Direct copy": dashboard.GREEN, "Named transform": dashboard.BLUE,
@@ -381,7 +358,14 @@ READ_ME = [
     ("Attribute usage", "One line per identity attribute: the profiles that map it and every mapping, "
                         "named transform and source provisioning policy that reads it."),
     ("Usage detail", "The same, one line per use: where, which object, which field, how."),
-    ("Transforms", "Every named transform used, what it does, where it is used, and its definition."),
+    ("Transforms", "Every named transform: what it does, where it is used, the named transforms it calls "
+                   "and that call it, what it depends on (as a tree) and its definition."),
+    ("Transform dependencies", "How the named transforms depend on each other, as one tree per identity "
+                               "attribute that uses one, then the named transforms that nothing uses. Below "
+                               "each line, indented, what it depends on: 'uses' (the attribute's mapping "
+                               "calls the transform), 'calls' (a transform calls another one) and 'reads' (a "
+                               "transform reads an identity attribute, itself computed by other "
+                               "transforms). Use the + and - buttons on the left to fold a tree."),
     ("Checks", "Points worth a look: Warning = probably wrong, Info = good to know."),
     *[(f"Column: {HEADERS[c]}", COLUMN_HELP[c]) for c in MAPPING_COLUMNS],
     *[(f"Mapping kind: {label}", meaning) for label, _, meaning in KINDS.values()],
@@ -398,13 +382,14 @@ READ_ME = [
 ]
 WIDE = {"Explanation", "Logic (short form)", "Definition (JSON)", "Points to check", "Description",
         "Details", "Used by (profile: attribute)", "Not mapped in", "Also used in",
-        "Read by profile mappings", "Read by transforms", "Used in provisioning policies", "Detail"}
+        "Read by profile mappings", "Read by transforms", "Used in provisioning policies", "Detail",
+        "What it does", "Calls", "Called by"}
 
 
-def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = None,
-                    display_names: dict[str, str] | None = None, origin: str = "",
-                    title: str = "Identity profile mappings",
-                    policies: list[dict] | None = None) -> dashboard.Dashboard:
+def analyse(profiles: list[dict], transforms: dict[str, dict] | None = None,
+            display_names: dict[str, str] | None = None, policies: list[dict] | None = None):
+    """``(profiles by priority, their mapping rows, every usage of an identity attribute)``; each
+    row also says where else its attribute is used (``used_in``)."""
     transforms = transforms or {}
     profiles = sorted(profiles, key=lambda p: (p.get("priority") or 0, p.get("name", "")))
     all_rows = [mapping_rows(p, transforms, display_names) for p in profiles]
@@ -414,6 +399,15 @@ def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = N
     for rows in all_rows:
         for row in rows:
             row["used_in"] = elsewhere.get(row["identity_attribute"], "")
+    return profiles, all_rows, usages
+
+
+def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = None,
+                    display_names: dict[str, str] | None = None, origin: str = "",
+                    title: str = "Identity attribute mappings",
+                    policies: list[dict] | None = None) -> dashboard.Dashboard:
+    transforms = transforms or {}
+    profiles, all_rows, usages = analyse(profiles, transforms, display_names, policies)
     all_checks = [profile_checks(p, rows) for p, rows in zip(profiles, all_rows, strict=True)]
     names = [p.get("name", "") for p in profiles]
     kind_colours = {label: colour for label, colour, _ in KINDS.values()}
@@ -434,7 +428,11 @@ def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = N
     tables.append(dashboard.Table("Attribute usage", attribute_usage.summary_rows(
         usages, names, lambda a: shown.get(a) or STANDARD_NAMES.get(a, "")), wide=WIDE))
     tables.append(dashboard.Table("Usage detail", attribute_usage.detail_rows(usages), wide=WIDE))
-    tables.append(dashboard.Table("Transforms", _transform_rows(profiles, all_rows, transforms), wide=WIDE))
+    graph = transform_graph.build(profiles, all_rows, transforms, set(display_names or {}) or None)
+    tables.append(dashboard.Table("Transforms", _transform_rows(profiles, all_rows, transforms, graph),
+                                  wide=WIDE, mono={"Depends on"}))
+    tables.append(dashboard.Table("Transform dependencies", transform_graph.rows(graph, profiles, all_rows),
+                                  wide=WIDE | {"Used by", "What it is"}, mono={"Tree"}, outline="Level"))
     tables.append(dashboard.Table("Checks", check_rows, wide=WIDE, fills={"Severity": SEVERITY_FILLS}))
 
     sections = [
@@ -449,6 +447,11 @@ def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = N
             {"Identity attribute": r["identity_attribute"], "Mapping": r["mapping"],
              "Explanation": r["explanation"], "Points to check": r["notes"]} for r in rows],
             ["Identity attribute", "Mapping", "Explanation", "Points to check"]))
+    dependencies = transform_graph.rows(graph, profiles, all_rows, transform_tree.PLAIN)
+    if dependencies:
+        sections.append(dashboard.Section("Transform dependencies", [
+            {**row, "Used by": "" if row["Level"] else row["Used by"]} for row in dependencies],
+            ["Used by", "Tree", "What it is"]))
     return dashboard.Dashboard(
         title, dashboard.subtitle(origin), _kpis(profiles, all_rows, all_checks, transforms),
         _charts(names, all_rows), tables, sections, READ_ME,
@@ -538,13 +541,19 @@ def _coverage_rows(names, all_rows) -> list[dict]:
             for a in attributes if not all(a in m for m in mapped)]
 
 
-def _transform_rows(profiles, all_rows, transforms) -> list[dict]:
+def _transform_rows(profiles, all_rows, transforms, graph) -> list[dict]:
+    called_by: dict[str, list[str]] = {}
+    for caller, definition in transforms.items():
+        for name in transform_tree.calls(definition):
+            called_by.setdefault(name, []).append(caller)
     usage: dict[str, list[str]] = {}
     for profile, rows in zip(profiles, all_rows, strict=True):
         for row in rows:
             for name in filter(None, row["transforms"].split("\n")):
                 usage.setdefault(name, []).append(f"{profile.get('name', '')}: {row['identity_attribute']}")
     rows_out = []
+    for name in transforms:
+        usage.setdefault(name, [])
     for name, users in sorted(usage.items(), key=lambda kv: kv[0].lower()):
         definition = transforms.get(name)
         kind = (definition or {}).get("type", "")
@@ -552,6 +561,10 @@ def _transform_rows(profiles, all_rows, transforms) -> list[dict]:
             "Transform": name, "Type": kind or ("not found" if transforms else "unknown"),
             "What it does": describe_type(kind) if kind else "", "Uses": len(users),
             "Used by (profile: attribute)": "\n".join(users),
+            "Calls": "\n".join(transform_tree.calls(definition)) if definition else "",
+            "Called by": "\n".join(sorted(called_by.get(name, []), key=str.lower)),
+            "Depends on": transform_tree.draw(
+                transform_graph.tree(graph, transform_graph.transform_id(name))),
             "Definition (JSON)": json.dumps(definition.get("attributes", ""), ensure_ascii=False, indent=1)
             if definition else ""})
     return rows_out

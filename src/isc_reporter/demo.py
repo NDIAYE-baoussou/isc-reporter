@@ -271,6 +271,12 @@ def sample_profiles() -> tuple[list[dict], dict[str, dict]]:
     def mapping(name, definition):
         return {"identityAttributeName": name, "transformDefinition": definition}
 
+    def reference(name, given=None):
+        return {"type": "reference", "attributes": {"id": name, **({"input": given} if given else {})}}
+
+    def identity(name):
+        return {"type": "identityAttribute", "attributes": {"name": name}}
+
     def profile(name, source, priority, mappings, count):
         return {
             "id": name,
@@ -288,9 +294,10 @@ def sample_profiles() -> tuple[list[dict], dict[str, dict]]:
         10,
         [
             mapping("uid", account("employeeId")),
-            mapping("email", account("mail", "Active Directory")),
-            mapping("firstname", account("givenName")),
-            mapping("lastname", account("surname")),
+            mapping("email", {"type": "firstValid", "attributes": {"values": [
+                account("mail", "Active Directory"), reference("Build email")]}}),
+            mapping("firstname", reference("Normalize name", account("givenName"))),
+            mapping("lastname", reference("Normalize name", account("surname"))),
             mapping(
                 "displayName",
                 {
@@ -321,12 +328,22 @@ def sample_profiles() -> tuple[list[dict], dict[str, dict]]:
         [
             mapping("uid", account("login", "Contractor Register")),
             mapping("email", account("email", "Contractor Register")),
-            mapping("lastname", account("lastName", "Contractor Register")),
+            mapping("lastname", reference("Normalize name", account("lastName", "Contractor Register"))),
             mapping("cloudLifecycleState", account("status", "Contractor Register")),
         ],
         312,
     )
     transforms = {
+        "Remove accents": {"name": "Remove accents", "type": "decomposeDiacriticalMarks", "attributes": {}},
+        "Clean name": {"name": "Clean name", "type": "trim",
+                       "attributes": {"input": reference("Remove accents")}},
+        "Normalize name": {"name": "Normalize name", "type": "normalizeNames",
+                           "attributes": {"input": reference("Clean name")}},
+        "Build email": {"name": "Build email", "type": "lower", "attributes": {"input": {
+            "type": "concat", "attributes": {"values": [identity("firstname"), ".", identity("lastname"),
+                                                         "@example.com"]}}}},
+        "Department code (old)": {"name": "Department code (old)", "type": "lookup",
+                                  "attributes": {"table": {"Finance": "FIN", "IT": "ITS", "default": "OTH"}}},
         "Date to ISO8601": {
             "name": "Date to ISO8601",
             "type": "dateFormat",
@@ -336,7 +353,8 @@ def sample_profiles() -> tuple[list[dict], dict[str, dict]]:
             "name": "Lifecycle state",
             "type": "dateCompare",
             "attributes": {
-                "firstDate": account("hireDate"),
+                "firstDate": {"type": "reference",
+                              "attributes": {"id": "Date to ISO8601", "input": account("hireDate")}},
                 "secondDate": "now",
                 "operator": "LTE",
                 "positiveCondition": "active",
@@ -408,6 +426,54 @@ def sample_leavers(rng: random.Random, people: list[dict], today):
                       "endDate", 3, today, origin="demo")
 
 
+def sample_role_impact(rng: random.Random, people: list[dict]):
+    """A disabled 'Finance Analyst' role for active Finance people or members of GRP-007, over the
+    fictional identities: some already have it or its access, some lost the criteria, some requested
+    it, and a few others hold all of its access."""
+    from isc_reporter.role_impact import RoleData
+
+    def grant(eid, name, source, via, privileged=False):
+        return {"id": eid, "name": name, "attribute": "memberOf", "value": f"CN={name}",
+                "source": {"id": source, "name": source}, "privileged": privileged, "via": [via]}
+
+    access = [grant("e3", "GRP-003", "Active Directory", "Finance - Active Directory"),
+              grant("e8", "GRP-008", "Active Directory", "Finance - Active Directory"),
+              grant("e21", "GRP-021", "SAP", "Finance - SAP", privileged=True),
+              grant("fin-share", "Finance reports", "Salesforce", "role")]
+    criteria = {"operation": "AND", "children": [
+        {"operation": "OR", "children": [
+            {"operation": "EQUALS", "key": {"type": "IDENTITY", "property": "attribute.department"},
+             "stringValue": "Finance"},
+            {"operation": "EQUALS", "stringValue": "CN=GRP-007", "key": {
+                "type": "ENTITLEMENT", "property": "attribute.memberOf", "sourceId": "Active Directory"}}]},
+        {"operation": "EQUALS", "key": {"type": "IDENTITY", "property": "attribute.cloudLifecycleState"},
+         "stringValue": "active"}]}
+    role = {"id": "finance-analyst", "name": "Finance Analyst", "enabled": False,
+            "accessProfiles": [{"id": "ap-ad", "name": "Finance - Active Directory"},
+                               {"id": "ap-sap", "name": "Finance - SAP"}],
+            "entitlements": [{"id": "fin-share", "name": "Finance reports"}],
+            "membership": {"type": "STANDARD", "criteria": criteria}}
+    granted = [{**{k: v for k, v in item.items() if k != "via"}, "type": "ENTITLEMENT"} for item in access]
+    identities, assigned = [], {}
+    for person in people:
+        held = [{**item, "attribute": "memberOf", "value": f"CN={item['name']}",
+                 "source": {"id": item["source"]["name"], "name": item["source"]["name"]}}
+                for item in person["access"] if item["type"] == "ENTITLEMENT"]
+        accounts = [{"accountId": a["name"], "source": {"id": a["source"]["name"],
+                                                        "name": a["source"]["name"]}}
+                    for a in person["accounts"]]
+        finance = person["attributes"]["department"] == "Finance"
+        draw = rng.random()
+        if finance and draw < 0.35:
+            assigned[person["id"]] = "ROLE_MEMBERSHIP"          # already has it, or lost the criteria
+        elif not finance and draw < 0.03:
+            assigned[person["id"]] = "ACCESS_REQUEST"
+        if person["id"] in assigned or (finance and draw < 0.5) or (not finance and draw > 0.97):
+            held += granted
+        identities.append({**person, "access": held, "accounts": accounts})
+    return RoleData(role, access, identities, assigned=assigned, query="*", origin="demo")
+
+
 def run(folder: str) -> list[str]:
     """Write every sample report into *folder*; returns the files written."""
     from isc_reporter import (
@@ -415,8 +481,10 @@ def run(folder: str) -> list[str]:
         certification_reports,
         identity_profiles,
         leavers,
+        mappings_html,
         report_writers,
         reporting,
+        role_impact,
         source_migration,
         sync_impact,
     )
@@ -453,8 +521,9 @@ def run(folder: str) -> list[str]:
         ),
     ]
     profiles, transforms = sample_profiles()
-    for extension, writer in (("xlsx", identity_profiles.write_xlsx), ("pdf", identity_profiles.write_pdf)):
-        path = os.path.join(folder, f"identity-profiles.{extension}")
+    for extension, writer in (("xlsx", identity_profiles.write_xlsx), ("pdf", identity_profiles.write_pdf),
+                              ("html", mappings_html.write_html)):
+        path = os.path.join(folder, f"mappings.{extension}")
         writer(path, profiles, transforms, origin="demo", policies=sample_policies())
         out.append(path)
     plan = source_migration.analyse(
@@ -479,4 +548,8 @@ def run(folder: str) -> list[str]:
     base = os.path.join(folder, "leavers")
     out += [leavers.write_xlsx(base + ".xlsx", residual), leavers.write_pdf(base + ".pdf", residual),
             leavers.write_csv(base + ".csv", residual)]
+    impact = role_impact.analyse(sample_role_impact(random.Random(17), people))
+    base = os.path.join(folder, "role-impact")
+    out += [role_impact.write_xlsx(base + ".xlsx", impact), role_impact.write_pdf(base + ".pdf", impact),
+            role_impact.write_csv(base + ".csv", impact)]
     return out

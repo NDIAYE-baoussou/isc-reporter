@@ -43,6 +43,8 @@ class Table:
     red_positive: set = field(default_factory=set)  # > 0 in red
     text_colours: dict = field(default_factory=dict)  # column -> {starts with: green/red/grey}
     fills: dict = field(default_factory=dict)          # column -> {exact value: background hex}
+    mono: set = field(default_factory=set)       # monospaced text (drawn trees)
+    outline: str = ""                            # column holding each row's level: rows fold below it
 
 
 @dataclass
@@ -120,6 +122,7 @@ def _formats(book) -> dict:
                                    "valign": "top", "text_wrap": True}),
         "percent": book.add_format({"num_format": "0%", "valign": "top"}),
         "wrap": book.add_format({"text_wrap": True, "valign": "top"}),
+        "mono": book.add_format({"text_wrap": True, "valign": "top", "font_name": "Consolas"}),
         "top": book.add_format({"valign": "top"}),
         "bold": book.add_format({"bold": True}),
         "red": book.add_format({"font_color": "#C62828", "bold": True}),
@@ -214,9 +217,12 @@ def _table(book, sheet, table: Table, fmt, name: str) -> None:
         return
     headers = list(rows[0])
     for index, header in enumerate(headers):
-        width = 45 if header in table.wide else max(10, min(30, len(header) + 4))
-        cell_format = fmt["percent"] if header in table.percent else \
-            fmt["wrap"] if header in table.wide else fmt["top"]
+        if header in table.mono:
+            width, cell_format = 60, fmt["mono"]
+        else:
+            width = 45 if header in table.wide else max(10, min(30, len(header) + 4))
+            cell_format = fmt["percent"] if header in table.percent else \
+                fmt["wrap"] if header in table.wide else fmt["top"]
         sheet.set_column(index, index, width, cell_format)
     values = [["" if r.get(h) is None else r.get(h) for h in headers] for r in rows]
     sheet.add_table(0, 0, len(rows), len(headers) - 1, {
@@ -225,6 +231,11 @@ def _table(book, sheet, table: Table, fmt, name: str) -> None:
         "columns": [{"header": h, "header_format": fmt["header"],
                      **({"format": fmt["percent"]} if h in table.percent else {})} for h in headers]})
     sheet.freeze_panes(1, 1)
+    if table.outline:
+        sheet.outline_settings(True, False, True, False)      # the fold button on the row above
+        for index, row in enumerate(rows, start=1):
+            if row.get(table.outline):
+                sheet.set_row(index, None, None, {"level": min(int(row[table.outline]), 7)})
     last = len(rows)
     for index, header in enumerate(headers):
         if header in table.bars:

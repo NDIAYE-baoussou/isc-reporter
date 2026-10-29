@@ -39,6 +39,17 @@ def search_all(isc, index: str, query: str, *, sort_field: str | None = "created
         body["searchAfter"] = [str(last.get(field, "")) for field in fields]
 
 
+def search_by_ids(isc, index: str, ids: list[str], *, include_nested: bool = True,
+                  chunk: int = 100) -> list[dict]:
+    """The documents of *index* with these ids, *chunk* ids per query."""
+    unique = list(dict.fromkeys(ids))
+    found: list[dict] = []
+    for start in range(0, len(unique), chunk):
+        query = "id:(" + " OR ".join(quote(i) for i in unique[start:start + chunk]) + ")"
+        found += search_all(isc, index, query, sort_field=None, include_nested=include_nested)
+    return found
+
+
 def date_range(start: str, end: str, field: str = "created") -> str:
     """Query clause covering whole days from *start* to *end* (``YYYY-MM-DD``, inclusive)."""
     for value in (start, end):
