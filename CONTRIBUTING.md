@@ -1,6 +1,8 @@
 # Contributing
 
-Thanks for helping! Bug reports, ideas and pull requests are welcome.
+Thanks for helping! Bug reports, ideas and pull requests are welcome. Looking for something to
+work on? See the [roadmap](ROADMAP.md). Everyone taking part follows the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Reporting a problem
 
@@ -15,7 +17,8 @@ personal data, or credentials**: replace names, emails and ids with fictional on
 2. Make your change with tests. Tests need no tenant: `tests/conftest.py` provides `FakeApi`
    and `FakeIsc`, and the real SailPoint SDK models are used to check what would be read.
 3. Run `pytest` and `ruff check src tests`.
-4. If the change is visible to users, add a line to `CHANGELOG.md` and update the README.
+4. If the change is visible to users, add a line to `CHANGELOG.md` and update the README. If a
+   command calls a new API endpoint, add it to `docs/permissions.md` with its scope.
 5. Open a pull request describing what changes and why.
 
 ## Design notes
