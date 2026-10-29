@@ -5,6 +5,15 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-29
+
+- Fixed: `mappings` stopped with `KeyError: 't:?'` when a reference transform has no `id`. Such a
+  reference is now shown as *(reference without id)*, a transform that cannot be found, and the
+  *Checks* sheet flags it (*Reference without id*). Transforms whose attributes are not an object no
+  longer stop the report either.
+- The SDK's warnings about values it does not know yet (new source features, for example) are no
+  longer printed.
+
 ## [0.4.0] - 2026-10-29
 
 - `role-impact`: what enabling a role would do. The identities its membership criteria select (or
