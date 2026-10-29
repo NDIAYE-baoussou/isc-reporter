@@ -5,6 +5,28 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-29
+
+- `role-impact`: what enabling a role would do. The identities its membership criteria select (or
+  its identity list), the entitlements ISC would provision to them and the accounts it would
+  create, who would lose the role, who has it outside the criteria, and who holds all of its access
+  without matching. `--from` tests a draft role with new criteria before it is saved.
+- `identity-profiles` is renamed `mappings`. `identity-profiles` and `profiles` still work, with a
+  warning, and will be removed in a future version. The reports are named `mappings_<date>` and
+  titled *Identity attribute mappings*.
+- `mappings`: dependencies between named transforms. The new *Transform dependencies* sheet draws,
+  for each identity attribute that uses a named transform, the tree of what it depends on: the
+  transforms it calls, and the identity attributes they read, computed in turn by other transforms.
+  The named transforms that nothing uses are listed too. The *Transforms* sheet lists every named
+  transform, used or not, with what it depends on; the PDF has the same trees.
+- `mappings`: interactive map in `mappings.html`, a page that works offline. Every named transform
+  and the identity attributes that link them, each one after what it depends on; selecting one
+  lights up its whole chain. Step-by-step diagrams of each identity attribute and named transform,
+  with zoom, folding, search and SVG export. Written by default with the Excel and PDF files
+  (`--format`).
+- `demo` also writes the role enablement impact and `mappings.html`, and its named transforms now
+  depend on each other.
+
 ## [0.3.0] - 2026-10-29
 
 - `iscr`: a short name for the command. `iscr <command>` and `python -m iscr <command>` work like
