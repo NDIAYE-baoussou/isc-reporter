@@ -161,5 +161,24 @@ def test_cli_without_any_direct_mapping_asks_for_a_map(tmp_path, monkeypatch):
     monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: fake_isc(policies=[]))
     base = ["analyze-before-sync", "AD", "--format", "csv", "-o", str(tmp_path / "x"), "--log-dir", ""]
     assert cli.main(base) == 2
+    assert cli.main([*base, "--only-map"]) == 2                 # nothing to compare at all
     assert cli.main([*base, "--map", "email=mail"]) == 0
     assert cli.main([*base, "--map", "email=mail", "--only-map"]) == 0
+
+
+def test_why_nothing_can_be_compared():
+    explain = sync_impact.nothing_to_compare
+    assert explain("HR", [], ["CREATE"], []).startswith("HR has no provisioning policy.")
+    assert "HR has no CREATE provisioning policy (it has: UPDATE); read it with --usage UPDATE." in \
+        explain("HR", [{"usageType": "UPDATE", "fields": []}], ["CREATE"], [])
+    policies = [{"usageType": "CREATE", "fields": [
+        {"name": "id", "transform": {"type": "rule", "attributes": {"name": "Generate ID"}}},
+        {"name": "status", "transform": {"type": "static", "attributes": {"value": "A"}}},
+        {"name": "password"}]}]
+    mappings, ignored = sync_impact.policy_mappings(policies)
+    assert mappings == []
+    text = explain("HR", policies, ["CREATE"], ignored, authoritative=True)
+    assert "No field of the CREATE policy of HR copies an identity attribute directly" in text
+    assert "Its fields: id (rule), status (static), password (none)." in text
+    assert "HR is an authoritative source" in text
+    assert text.endswith("give pairs with --map identityAttribute=accountAttribute.")

@@ -1,5 +1,7 @@
-"""Impact analysis for replacing a source (typically the HR source) by a new one, limited to the
-identity layer: identity profiles, their attribute mappings, and transforms.
+"""Impact analysis for replacing a source (typically the HR source) by a new one: identity
+profiles, their attribute mappings and transforms, and the criteria (roles, dimensions, segments,
+account and manager correlation) that use the identity attributes computed from the old source or
+read it directly.
 
 It finds what depends on the old source, matches each old account attribute to one of the new
 source, shows every mapping before and after, and writes draft JSON for the new identity
@@ -15,7 +17,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from isc_reporter import dashboard
+from isc_reporter import criteria, dashboard
 from isc_reporter.csvio import Column, read_rows, write_table
 from isc_reporter.identity_profiles import INFO, WARNING, _Walk
 
@@ -60,6 +62,10 @@ class Plan:
     mappings: list[dict] = field(default_factory=list)          # before/after per profile attribute
     checks: list[tuple] = field(default_factory=list)          # (severity, object, check, details)
     drafts: dict[str, dict] = field(default_factory=dict)       # relative path -> JSON
+    impacted: dict[str, str] = field(default_factory=dict)      # identity attribute -> why it may change
+    criteria: list[dict] = field(default_factory=list)          # rows of the Criteria sheet
+    criteria_analysed: bool = False
+    criteria_notes: list[str] = field(default_factory=list)
 
 
 # -- walking definitions --------------------------------------------------------
@@ -133,8 +139,9 @@ def read_attribute_map(path: str | None) -> dict[str, str]:
 
 def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new: Source,
             attribute_map: dict[str, str] | None = None, in_place: bool = False,
-            suffix: str | None = None) -> Plan:
-    attribute_map = attribute_map or {}
+            suffix: str | None = None, objects: criteria.Objects | None = None) -> Plan:
+    """*objects*: roles, segments and sources whose criteria are checked (not checked if None)."""
+    attribute_map = {old_name.lower(): new_name for old_name, new_name in (attribute_map or {}).items()}
     plan = Plan(old, new, in_place, suffix if suffix is not None else f" - {new.name}")
     if old.name.lower() == new.name.lower():
         plan.checks.append((WARNING, "", "Same source", "The old and new source are the same."))
@@ -190,6 +197,9 @@ def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new:
     for name, info in plan.transforms.items():
         for attribute in info["attributes"]:
             _use(plan, attribute, f"transform: {name}")
+    if objects is not None:
+        for attribute, where in criteria.old_source_attributes(objects, old):
+            _use(plan, attribute, where)
 
     # Old -> new attribute names.
     for attribute, info in plan.attributes.items():
@@ -240,6 +250,18 @@ def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new:
             for key in TRANSFORM_RUNTIME_FIELDS:
                 draft.pop(key, None)
         plan.drafts[f"transforms/{_file(draft['name'])}.json"] = draft
+
+    # Criteria using the identity attributes computed from the old source, or reading it.
+    touched: dict[str, list[str]] = {}
+    for item in plan.profiles:
+        for attribute in item["touched"]:
+            touched.setdefault(attribute, []).append(item["profile"].get("name", ""))
+    plan.impacted = criteria.impacted_attributes(profiles, transforms, touched)
+    if objects is not None:
+        plan.criteria = criteria.findings(objects, plan.impacted, old, new, plan.attributes)
+        plan.criteria_notes = list(objects.notes)
+        plan.criteria_analysed = any(found is not None for found in (objects.roles, objects.segments,
+                                                                     objects.sources))
 
     _checks(plan, profiles)
     unknown = {}
@@ -301,10 +323,16 @@ def _checks(plan: Plan, profiles: list[dict]) -> None:
         plan.checks.append((INFO, name, "Transform not used by a profile",
                             "Reads the old source but no identity profile uses it here; it may be used "
                             "elsewhere (provisioning policies, other transforms not exported)."))
-    plan.checks.append((INFO, "", "Outside this analysis",
-                        "Also plan: lifecycle states of the new profile, correlation of the new HR "
-                        "accounts to existing identities, provisioning policies, roles/access rules "
-                        "and workflows using source attributes, and identity refresh after the switch."))
+    plan.checks += criteria.checks(plan.criteria, plan.criteria_notes)
+    if plan.criteria_analysed:
+        outside = ("lifecycle states of the new profile, provisioning policies and workflows using "
+                   "source or identity attributes, certification campaign filters, and identity refresh "
+                   "after the switch")
+    else:
+        outside = ("lifecycle states of the new profile, correlation of the new HR accounts to existing "
+                   "identities, role and segment criteria, provisioning policies and workflows using "
+                   "source attributes, and identity refresh after the switch")
+    plan.checks.append((INFO, "", "Outside this analysis", f"Also plan: {outside}."))
 
 
 # -- output ---------------------------------------------------------------------
@@ -313,6 +341,9 @@ STEPS = [
     "Review the 'Attribute mapping' sheet and complete attribute-mapping.csv (old_attribute;new_attribute).",
     "Run the analysis again with --attribute-map attribute-mapping.csv until no attribute is TO DEFINE.",
     "Review the drafts in transforms/ and identity-profiles/ (search for TODO_ and <new source id>).",
+    "Review the 'Criteria' sheet: rewrite the role criteria that read the old source, recreate its "
+    "correlation on the new source, and check that the criteria using impacted identity attributes still "
+    "match the new values (role membership is recomputed at the next identity refresh).",
     "Create the transforms first (copies), then the new identity profile(s), in a sandbox tenant.",
     "Recreate the lifecycle states of the new profile and set its priority.",
     "Correlate the new source accounts to the existing identities, then run an identity refresh.",
@@ -331,6 +362,14 @@ READ_ME = [
                  "'to complete' means an attribute is still TODO."),
     ("Transforms", "Transforms reading the old source, and transforms calling them (they must follow, "
                    "since they would still call the old version)."),
+    ("Criteria", "Role and dimension membership, segment visibility, and account and manager correlation "
+                 "of the sources that use an identity attribute computed from the old source (directly, or "
+                 "from another impacted attribute), or that read the old source itself. One line per "
+                 "criterion; 'All criteria' shows the whole criteria of the object."),
+    ("Role criteria", "Role membership is recomputed at each identity refresh: if an identity attribute "
+                      "gets new values (codes, case, format), identities gain or lose roles and their "
+                      "access. A criterion on an account attribute or entitlement of the old source stops "
+                      "matching once its accounts are gone."),
     ("Checks", "Points to review, Warning first."),
     ("Drafts", "identity-profiles/ and transforms/ next to this workbook: JSON ready to review and create. "
                "Nothing has been changed in the tenant."),
@@ -338,7 +377,9 @@ READ_ME = [
 RESULT_FILLS = {"OK": "E2F0D9", "Assumed": "FFF2CC", "To define": "F8CBAD"}
 CHANGE_FILLS = {"unchanged": "EDEDED", "changed": "E2F0D9", "to complete": "F8CBAD"}
 WIDE = {"Used by", "Today", "After the migration", "Details", "Step", "Action", "Attributes to change",
-        "Used by (profile: attribute)", "Old attributes read", "Calls"}
+        "Used by (profile: attribute)", "Old attributes read", "Calls", "Criterion", "Uses", "Impact",
+        "All criteria"}
+SEVERITY_FILLS = {WARNING: "F8CBAD", INFO: "DDEBF7"}
 
 
 def _result(status: str) -> str:
@@ -379,6 +420,7 @@ def build_dashboard(plan: Plan, title: str = "") -> dashboard.Dashboard:
         ("Old source attributes used", str(len(attributes)), dashboard.BLUE),
         ("New attribute to define", str(results["To define"]),
          dashboard.RED if results["To define"] else dashboard.GREEN),
+        _criteria_tile(plan),
         ("Warnings", str(warnings), dashboard.RED if warnings else dashboard.GREEN),
     ]
     charts = []
@@ -396,8 +438,8 @@ def build_dashboard(plan: Plan, title: str = "") -> dashboard.Dashboard:
         dashboard.Table("Attribute mapping", attributes, wide=WIDE, fills={"Result": RESULT_FILLS}),
         dashboard.Table("Mappings", mappings, wide=WIDE, fills={"Change": CHANGE_FILLS}),
         dashboard.Table("Transforms", transforms, wide=WIDE),
-        dashboard.Table("Checks", checks, wide=WIDE,
-                        fills={"Severity": {WARNING: "F8CBAD", INFO: "DDEBF7"}}),
+        dashboard.Table("Criteria", plan.criteria, wide=WIDE, fills={"Severity": SEVERITY_FILLS}),
+        dashboard.Table("Checks", checks, wide=WIDE, fills={"Severity": SEVERITY_FILLS}),
     ]
     sections = [
         dashboard.Section("Next steps", [{"#": i, "Step": s} for i, s in enumerate(STEPS, start=1)],
@@ -408,6 +450,8 @@ def build_dashboard(plan: Plan, title: str = "") -> dashboard.Dashboard:
                           ["Old attribute", "New attribute", "Result", "Uses"]),
         dashboard.Section("Mappings that change", [m for m in mappings if m["Change"] != "unchanged"],
                           ["Profile", "Identity attribute", "Change", "Today", "After the migration"]),
+        dashboard.Section("Criteria to review", plan.criteria,
+                          ["Severity", "Type", "Object", "Criterion", "Action"]),
         dashboard.Section("Points to check", checks, ["Severity", "Object", "Check", "Details"]),
     ]
     how = "updated in place" if plan.in_place else f"copied with the suffix '{plan.suffix}'"
@@ -417,8 +461,18 @@ def build_dashboard(plan: Plan, title: str = "") -> dashboard.Dashboard:
         kpis, charts, tables, sections, READ_ME,
         colours={"OK": dashboard.GREEN, "Assumed": dashboard.AMBER, "To define": dashboard.RED,
                  "unchanged": dashboard.GREY, "changed": dashboard.GREEN, "to complete": dashboard.RED},
-        wide_pdf={"Step", "Action", "Attributes to change", "Today", "After the migration", "Details"},
+        wide_pdf={"Step", "Action", "Attributes to change", "Today", "After the migration", "Details",
+                  "Criterion"},
         alert=lambda row: row.get("Severity") == WARNING or row.get("Result") == "To define")
+
+
+def _criteria_tile(plan: Plan) -> tuple[str, str, str]:
+    if not plan.criteria_analysed:
+        return ("Criteria to review", "not analysed", dashboard.GREY)
+    roles = len({r["Object"] for r in plan.criteria if r["Type"] in (criteria.ROLE, criteria.DIMENSION)})
+    warned = any(r["Severity"] == WARNING for r in plan.criteria)
+    return ("Criteria to review", f"{len(plan.criteria)}  ({roles} role(s) or dimension(s))",
+            dashboard.RED if warned else dashboard.GREEN)
 
 
 def write_outputs(plan: Plan, folder: str, pdf: bool = True) -> str:

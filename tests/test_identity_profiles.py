@@ -201,7 +201,7 @@ def test_cli_from_tenant(tmp_path, monkeypatch):
         lambda limit, offset: [model] if offset == 0 else []
     monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: isc)
     out = tmp_path / "m.xlsx"
-    assert cli.main(["profiles", "-o", str(out), "--log-dir", ""]) == 0
+    assert cli.main(["identity-profiles", "-o", str(out), "--log-dir", ""]) == 0
     assert out.exists()
-    assert cli.main(["profiles", "--profile", "nope", "-o", str(out),
-                     "--log-dir", ""]) == 2
+    # the old name still works (an unknown profile: exit code 2)
+    assert cli.main(["profiles", "--profile", "nope", "-o", str(out), "--log-dir", ""]) == 2

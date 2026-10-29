@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from enum import Enum
 
 log = logging.getLogger("isc_reporter")
 
@@ -130,7 +131,9 @@ def _plain(value):
         return [_plain(item) for item in value]
     if hasattr(value, "isoformat"):                   # datetime, date
         return value.isoformat()
-    if hasattr(value, "value") and not isinstance(value, (str, int, float, bool)):  # enum
+    if isinstance(value, Enum):                       # also str enums, whose str() is "Type.VALUE"
+        return value.value
+    if hasattr(value, "value") and not isinstance(value, (str, int, float, bool)):  # enum-like
         return value.value
     return value
 

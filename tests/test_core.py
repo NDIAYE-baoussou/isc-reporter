@@ -100,3 +100,18 @@ def test_date_range():
         date_range("2026-05-31", "2026-05-01")
     with pytest.raises(UsageError):
         date_range("31/05/2026", "2026-06-01")
+
+
+# -- entry points ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("module", ["isc_reporter", "iscr"])
+def test_python_dash_m_runs_the_command_line(module, monkeypatch, capsys):
+    import runpy
+
+    from isc_reporter import __version__
+
+    monkeypatch.setattr("sys.argv", [module, "--version"])
+    with pytest.raises(SystemExit) as exit_:
+        runpy.run_module(module, run_name="__main__")
+    assert exit_.value.code == 0 and __version__ in capsys.readouterr().out

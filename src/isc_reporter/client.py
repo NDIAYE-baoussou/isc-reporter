@@ -45,6 +45,10 @@ class Isc:
         return self._api("CertificationSummariesApi")
 
     @property
+    def dimensions(self):
+        return self._api("DimensionsApi")
+
+    @property
     def identity_attributes(self):
         return self._api("IdentityAttributesApi")
 
@@ -57,12 +61,24 @@ class Isc:
         return self._api("IdentityProfilesApi")
 
     @property
+    def lifecycle_states(self):
+        return self._api("LifecycleStatesApi")
+
+    @property
+    def roles(self):
+        return self._api("RolesApi")
+
+    @property
     def transforms(self):
         return self._api("TransformsApi")
 
     @property
     def search(self):
         return self._api("SearchApi")
+
+    @property
+    def segments(self):
+        return self._api("SegmentsApi")
 
     @property
     def sources(self):

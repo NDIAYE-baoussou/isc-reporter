@@ -1,57 +1,100 @@
 # isc-reporter
 
-Excel dashboards and PDF reports for **SailPoint Identity Security Cloud (ISC)**, from the command line.
+[![PyPI](https://img.shields.io/pypi/v/isc-reporter)](https://pypi.org/project/isc-reporter/)
+[![Python](https://img.shields.io/pypi/pyversions/isc-reporter)](https://pypi.org/project/isc-reporter/)
+[![CI](https://github.com/NDIAYE-baoussou/isc-reporter/actions/workflows/ci.yml/badge.svg)](https://github.com/NDIAYE-baoussou/isc-reporter/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/LICENSE)
 
-![Certification campaign dashboard](docs/images/campaigns.png)
+Reports and change-impact analysis for **SailPoint Identity Security Cloud (ISC)**, from the
+command line. `isc-reporter` turns what your tenant holds into Excel dashboards (KPI tiles, native
+charts, filterable tables), PDF and CSV files people can read, and shows what a configuration
+change would do before you make it. It only reads from the tenant.
 
-`isc-reporter` turns what ISC knows into reports people can read: workbooks with KPI tiles,
-native Excel charts and filterable tables, and matching PDF files to send around.
-
-| Command       | What you get                                                                                                                                                                                                                                                 |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `search`    | Any search (identities, access profiles, roles, entitlements, events, account activities, workflows) with **one line per object**: an identity's roles, access profiles, entitlements and accounts are consolidated instead of repeated on many lines. |
-| `campaigns` | Certification campaign dashboard: progress, approved / revoked / pending decisions by access type, reviewer workload, overdue certifications, and every reviewed item for audit evidence.                                                                    |
-| `changes`   | Identity attribute changes **with old and new values** over a period (e.g. department and manager changes of the last 30 days), which ISC search cannot show.                                                                                          |
-| `profiles`  | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, and checks for likely mistakes.                                                                                              |
-| `migration` | Impact analysis for replacing a source (typically a new HR system): impacted identity profiles, transforms and attribute mappings, before/after, and draft JSON for the new objects.                                                                         |
-
-**Read-only:** `isc-reporter` only reads from your tenant. It never creates, changes or deletes
-anything; the migration analysis writes its drafts to local files for you to review.
+![Certification campaign dashboard](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/campaigns.png)
 
 > isc-reporter is a community project. It is not affiliated with, endorsed or supported by
 > SailPoint Technologies. SailPoint and Identity Security Cloud are trademarks of SailPoint
 > Technologies, Inc.
 
-## Install
+## What it helps with
 
-Python 3.10 or later.
+- **See what ISC holds.** Identities with their roles, access profiles, entitlements and accounts
+  on one line each, certification progress and reviewer workload, attribute changes with their old
+  and new values. *For IAM operations, managers and auditors.*
+- **Understand the configuration.** How every identity attribute is computed, in plain words,
+  where else it is used (transforms, provisioning policies), and checks for likely mistakes.
+  *For ISC engineers and architects.*
+- **Change safely.** Before replacing a source or enabling attribute synchronization, see what
+  would be impacted or updated, with draft JSON to review. *For implementation teams and
+  consultants.*
+- **Keep audit evidence.** Every certification decision with its reviewer comment, attribute
+  change history, and the query behind each report, in files you can archive. *For audit and
+  compliance.*
 
-```bash
-pip install isc-reporter
-```
+## Commands
 
-Or from a clone of this repository: `pip install .`
+| Command | What you get | Output | Maturity |
+| --- | --- | --- | --- |
+| `search` | Any search (identities, access profiles, roles, entitlements, events, account activities, workflows) with **one line per object**: an identity's roles, access profiles, entitlements and accounts are consolidated instead of repeated on many lines. | xlsx, pdf, csv | Beta |
+| `campaigns` | Certification campaign dashboard: progress, approved / revoked / pending decisions by access type, reviewer workload, overdue certifications, and every reviewed item for audit evidence. | xlsx, pdf | Beta |
+| `changes` | Identity attribute changes **with old and new values** over a period (e.g. department and manager changes of the last 30 days), which ISC search cannot show. | xlsx, pdf, csv | Beta |
+| `identity-profiles` | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, where else the attribute is used, and checks for likely mistakes. | xlsx, pdf | Beta |
+| `migration` | Impact of replacing a source (typically a new HR system) on identity profiles, transforms and attribute mappings, before / after, with draft JSON for the new objects, and the role, segment and correlation criteria that use the impacted attributes. | xlsx, pdf, csv, JSON drafts | Beta |
+| `analyze-before-sync` | Forecast of the updates ISC could send to a target system if attribute synchronization is enabled on a source: values added, changed or cleared, per attribute and per account. | xlsx, pdf, csv | Experimental |
+| `leavers` | Identities in a leaver lifecycle state that still have enabled accounts, and for each account whether the lifecycle state should have disabled it (a failure to fix) or does not cover it (a configuration gap). | xlsx, pdf, csv | Beta |
+| `demo` | Every report above, built from fictional data, without a tenant. | all of the above | |
 
-## Try it without a tenant
+**Beta**: documented and covered by automated tests; needs validation on more real tenants.
+**Experimental**: new; its results rest on assumptions still to be confirmed on real tenants, and
+may change. A command becomes **Stable** once it has been used on several real tenants without
+open issues.
 
-```bash
-isc-reporter demo
-```
+## Quick start
 
-writes every report, built from fictional data, to `outputs/demo/`.
+You need Python 3.10 or later.
 
-## Connect to your tenant
+1. **Install**
 
-Create a [personal access token](https://documentation.sailpoint.com/saas/help/common/api_keys.html)
-for a user who can read what you want to report on, then either set environment variables:
+   ```bash
+   python -m pip install isc-reporter
+   ```
 
-```bash
-export SAIL_BASE_URL="https://<tenant>.api.identitynow.com"   # Windows PowerShell: $env:SAIL_BASE_URL = "..."
-export SAIL_CLIENT_ID="<client id>"
-export SAIL_CLIENT_SECRET="<client secret>"
-```
+2. **Try it without a tenant.** This writes every report, built from fictional data, to
+   `outputs/demo/`:
 
-or create a `config.json` in the folder you run from (or pass `--config path/to/file.json`):
+   ```bash
+   isc-reporter demo
+   ```
+
+3. **Connect to your tenant.** Create a
+   [personal access token](https://documentation.sailpoint.com/saas/help/common/api_keys.html)
+   with [the permissions of the commands you will use](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/docs/permissions.md),
+   then set:
+
+   ```bash
+   export SAIL_BASE_URL="https://<tenant>.api.identitynow.com"   # PowerShell: $env:SAIL_BASE_URL = "..."
+   export SAIL_CLIENT_ID="<client id>"
+   export SAIL_CLIENT_SECRET="<client secret>"
+   ```
+
+4. **Run a first report**
+
+   ```bash
+   isc-reporter search identities
+   ```
+
+`iscr` is a short name for the same command: `iscr demo` works too. If the command is not found, or
+is blocked by an application control policy (common on managed Windows computers), run it through
+Python instead: `python -m iscr demo` (`py -m iscr demo` on Windows).
+
+## Configuration
+
+Credentials are read from the first of:
+
+1. `--config path/to/file.json`;
+2. the `SAIL_BASE_URL`, `SAIL_CLIENT_ID` and `SAIL_CLIENT_SECRET` environment variables
+   (`SAILPOINT_*` also work);
+3. a `config.json` in the folder you run from.
 
 ```json
 {
@@ -61,19 +104,35 @@ or create a `config.json` in the folder you run from (or pass `--config path/to/
 }
 ```
 
-The token needs read access to what each command uses: search (`sp:search:read`) for `search`
-and `changes`, identity history (`idn:identity-history:read`) for `changes`, certification
-campaigns and certifications for `campaigns`, identity profiles, transforms and identity
-attributes for `profiles`, and sources for `migration`.
+Every command writes its reports to `outputs/` (change with `--output-dir`, or name the file with
+`-o`) and its log to `logs/` (`--log-dir ""` turns it off), and accepts `--format` (`xlsx`, `pdf`,
+and `csv` where it makes sense). `isc-reporter <command> --help` lists every option.
 
-## Reports
+## Safety, permissions and privacy
 
-Every command writes to `outputs/` (change with `--output-dir`, or name the file with `-o`),
-logs to `logs/`, and accepts `--format xlsx pdf` (plus `csv` where it makes sense).
+- **Read-only.** isc-reporter only reads from your tenant: it never creates, changes or deletes
+  anything. `migration` writes draft JSON to local files for you to review, and
+  `analyze-before-sync` forecasts updates without sending any.
+- **Offline where it can be.** `demo`, `identity-profiles --from` and `migration --from` use fictional data
+  or exported JSON files and never connect.
+- **Least privilege.** [docs/permissions.md](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/docs/permissions.md)
+  lists the endpoints, scopes and user levels each command needs, so the token can have no more
+  than that.
+- **Credentials.** Keep them in environment variables or in a `config.json`, which `.gitignore`
+  keeps out of version control. isc-reporter does not write them to its logs or reports.
+- **Personal data.** Reports contain names, emails and access. `.gitignore` keeps `outputs/`,
+  `logs/`, spreadsheets and PDFs out of version control; handle reports under your organisation's
+  data protection rules, and never attach real reports to public issues.
+- **Load on the tenant.** Searches are paged past the 10,000-result limit, and throttled calls are
+  retried after the delay ISC asks for. Commands that make one call per identity or certification
+  have options to narrow them: see
+  [load on the tenant](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/docs/permissions.md#load-on-the-tenant).
+
+## Command reference
 
 ### Search reports
 
-![Identities report](docs/images/search.png)
+![Identities report](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/search.png)
 
 ```bash
 isc-reporter types                                        # available report types
@@ -97,7 +156,8 @@ isc-reporter search identities --columns displayName,email,attributes.location -
 The workbook has a *Summary* (key figures and a chart per breakdown), the *Data* as an Excel
 table, a *Detail* sheet with `--expand`, and the *Query* used. Any other search index works too,
 with columns chosen automatically or with `--columns`. Reports can be saved as JSON and shared:
-see [`examples/reports/`](examples/reports) and `--definition`.
+see [`examples/reports/`](https://github.com/NDIAYE-baoussou/isc-reporter/tree/main/examples/reports)
+and `--definition`.
 
 ### Certification campaigns
 
@@ -116,7 +176,7 @@ progress but have no reviewer detail (their reviews are not identity certificati
 
 ### Identity attribute changes
 
-![Identity attribute changes](docs/images/changes.png)
+![Identity attribute changes](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/changes.png)
 
 ```bash
 isc-reporter changes --attributes department,manager --days 30 --format xlsx pdf csv
@@ -133,12 +193,12 @@ made per modified identity: narrow large tenants with `--query` or `--max-identi
 
 ### Identity profile mappings
 
-![Identity profile mappings](docs/images/profiles.png)
+![Identity profile mappings](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/profiles.png)
 
 ```bash
-isc-reporter profiles
-isc-reporter profiles --profile Employees --profile Contractors
-isc-reporter profiles --from exports/                     # offline, from exported JSON
+isc-reporter identity-profiles
+isc-reporter identity-profiles --profile Employees --profile Contractors
+isc-reporter identity-profiles --from exports/            # offline, from exported JSON
 ```
 
 One sheet per profile with, for every identity attribute, the mapping kind, a plain-language
@@ -149,9 +209,17 @@ mapped, missing transforms, lifecycle state copied as is, identical mappings, ot
 `--from` reads a profile, a list of profiles or a configuration export, with transforms found in
 the same files.
 
+For every identity attribute the report also shows where else it is used, in the *Also used in*
+column of each profile sheet and in two sheets: *Attribute usage* (one line per attribute: the
+profiles that map it, the mappings and named transforms that read it, the source provisioning
+policies that use it, and which sources) and *Usage detail* (one line per use). Provisioning
+policies are read from every source of the tenant (a source that cannot be read is skipped with a
+warning), or from a source export given to `--from`. Identity attributes used in rules (code)
+cannot be detected.
+
 ### Source migration analysis
 
-![Source migration](docs/images/migration.png)
+![Source migration](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/migration.png)
 
 ```bash
 isc-reporter migration --old-source "HR System" --new-source "New HR"
@@ -163,8 +231,18 @@ Finds the identity profiles authoritative on or reading the old source, the tran
 it and those calling them, matches each old account attribute to the new source (mapping file,
 or same name in the new account schema), shows every mapping before and after, and writes draft
 JSON for the new identity profiles and transforms. Transforms are copied with a suffix so both
-sources can run in parallel (`--in-place` to update them instead). Lifecycle states, account
-correlation, provisioning policies and workflows are listed as next steps, not analysed.
+sources can run in parallel (`--in-place` to update them instead).
+
+The *Criteria* sheet lists what selects identities or matches accounts on the identity attributes
+computed from the old source (directly, or from another impacted attribute): role and dimension
+membership criteria, segment visibility, and the account and manager correlation of the other
+sources. Their result depends on the new values: if `department` gets new codes, identities gain
+or lose roles, and their access, at the next identity refresh. Criteria that read the old source
+itself (account attributes or entitlements in role criteria, and its own correlation) are listed
+with their rewrite on the new source, and their account attributes are added to
+`attribute-mapping.csv`. With `--from`, roles, segments and sources are read from the export when
+it contains them. Lifecycle states, provisioning policies and workflows are listed as next steps,
+not analysed.
 
 ### Before enabling attribute synchronization
 
@@ -190,16 +268,42 @@ percent of the accounts (default 10) would be updated.
 Sheets: *Dashboard*, *Attributes* (per mapped attribute: accounts compared, added, changed, cleared,
 share, risk), *Accounts* (worst first), *Changes* (current and new value of every update; the CSV has
 them all), *Not analysed* (policy fields that are not a direct copy), *Checks*. Every difference is
-counted, as if ISC evaluated all accounts, so read the figures as an upper bound. The token needs read
-access to sources, provisioning policies (`idn:provisioning-policy:read`), accounts and search. The
-*Changes* sheet contains real attribute values: protect the file.
+counted, as if ISC evaluated all accounts, so read the figures as an upper bound. The *Changes*
+sheet contains real attribute values: protect the file.
 
-## Privacy
+### Leavers who still have access
 
-Reports contain personal data (names, emails, access). The default `.gitignore` keeps
-`outputs/`, `logs/`, spreadsheets, PDFs and `config.json` out of version control; handle the
-reports under your organisation's data protection rules, and never attach real reports to
-public issues.
+```bash
+isc-reporter leavers                                       # states configured as inactive
+isc-reporter leavers --states inactive gardenLeave inactive30j out
+isc-reporter leavers --date-attribute endDate --grace 1 --exclude-source "Payslip Portal"
+```
+
+Lists the identities in a leaver lifecycle state that still have enabled accounts. By default the
+leaver states are the lifecycle states configured as inactive in the identity profiles; give your
+own with `--states`. Disabled accounts and accounts of authoritative sources are left out
+(`--include-authoritative` keeps the latter), as are the sources given with `--exclude-source`.
+
+For each enabled account, the lifecycle state's configuration gives the cause: *Should be disabled*
+(or *deleted*) means the state should have done it, so provisioning failed, is pending or was
+undone; *Not covered by the lifecycle state* means nothing disables accounts of that source, a
+configuration gap. With `--date-attribute` (the identity attribute holding the departure date,
+ISO 8601, dd/MM/yyyy or yyyyMMdd) the report shows the days since leaving, and with `--grace` the
+accounts still enabled after that many days. Sheets: *Dashboard*, *Leavers with access*, *Enabled
+accounts* (privileged first), *By source*, *Lifecycle states* (their account actions) and
+*Settings*.
+
+## Roadmap and contributing
+
+[ROADMAP.md](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/ROADMAP.md) describes where
+the project is going; the next milestone is one format for every finding, with JSON output for
+automation. Contributions are welcome: a new check or report, test fixtures, documentation, or
+simply trying a command on your tenant and telling what you found. See
+[CONTRIBUTING.md](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/CONTRIBUTING.md) and
+the [Code of Conduct](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/CODE_OF_CONDUCT.md).
+Report security problems privately, as described in
+[SECURITY.md](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/SECURITY.md). Changes are
+listed in [CHANGELOG.md](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/CHANGELOG.md).
 
 ## Development
 
@@ -211,8 +315,8 @@ ruff check src tests
 ```
 
 Tests need no tenant: the SDK is replaced by recording fakes and the real SDK models are used to
-check what would be read. See [CONTRIBUTING.md](CONTRIBUTING.md).
+check what would be read.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/LICENSE)

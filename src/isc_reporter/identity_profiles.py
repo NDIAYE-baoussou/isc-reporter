@@ -138,10 +138,8 @@ def _objects(data):
             yield data
 
 
-def load_policies(paths: list[str]) -> list[dict]:
-    """Provisioning policies of the sources found in exported files (a source export lists its
-    ``provisioningPolicies``)."""
-    policies = []
+def iter_objects(paths: list[str]):
+    """Every object of the JSON files at *paths* (files or folders); unreadable files are skipped."""
     for path in paths:
         files = (sorted(glob.glob(os.path.join(path, "**", "*.json"), recursive=True))
                  if os.path.isdir(path) else [path])
@@ -151,11 +149,14 @@ def load_policies(paths: list[str]) -> list[dict]:
                     data = json.load(fh)
             except (OSError, ValueError):
                 continue
-            for obj in _objects(data):
-                if isinstance(obj, dict):
-                    policies += [{**policy, "source": obj.get("name", "")}
-                                 for policy in obj.get("provisioningPolicies") or []]
-    return policies
+            yield from (obj for obj in _objects(data) if isinstance(obj, dict))
+
+
+def load_policies(paths: list[str]) -> list[dict]:
+    """Provisioning policies of the sources found in exported files (a source export lists its
+    ``provisioningPolicies``)."""
+    return [{**policy, "source": obj.get("name", "")}
+            for obj in iter_objects(paths) for policy in obj.get("provisioningPolicies") or []]
 
 
 def fetch_policies(isc) -> list[dict]:

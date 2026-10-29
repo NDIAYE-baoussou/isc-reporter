@@ -145,6 +145,29 @@ def describe(transform: dict) -> str:
     return f"the {kind} '{name}'" if name else f"a {kind} transform"
 
 
+def nothing_to_compare(source: str, policies: list[dict], usage_types, ignored: list[dict],
+                       authoritative: bool = False) -> str:
+    """Why no attribute can be compared: which policies the source has, and what the fields of the
+    policies read do instead of copying an identity attribute."""
+    wanted = [u.upper() for u in usage_types]
+    present = sorted({str(p.get("usageType", "")).upper() for p in policies} - {""})
+    if not policies:
+        text = f"{source} has no provisioning policy."
+    elif not set(wanted) & set(present):
+        text = (f"{source} has no {'/'.join(wanted)} provisioning policy (it has: {', '.join(present)}); "
+                f"read it with --usage {' '.join(present)}.")
+    else:
+        fields = [f"{item['Field']} ({item['Transform']})" for item in ignored]
+        listed = ", ".join(fields[:15]) + (f" and {len(fields) - 15} more" if len(fields) > 15 else "")
+        text = (f"No field of the {'/'.join(wanted)} policy of {source} copies an identity attribute "
+                "directly, and attribute synchronization only updates those. "
+                f"Its fields: {listed or 'none'}.")
+    if authoritative:
+        text += (f" {source} is an authoritative source: attribute synchronization usually concerns the "
+                 "sources identities are provisioned to (Active Directory, for example).")
+    return text + " To compare attributes anyway, give pairs with --map identityAttribute=accountAttribute."
+
+
 def parse_maps(values: list[str] | None) -> list[Mapping]:
     """``identity=account`` pairs given on the command line."""
     mappings = []

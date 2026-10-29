@@ -150,6 +150,9 @@ def _changes(args) -> int:
 def _profiles(args) -> int:
     from isc_reporter import identity_profiles
 
+    if args.command == "profiles":
+        log.warning("The 'profiles' command is now called 'identity-profiles'; the old name will be removed "
+                    "in a future version.")
     if args.source:
         profiles, transforms = identity_profiles.load_files(args.source)
         policies = identity_profiles.load_policies(args.source)
@@ -197,26 +200,31 @@ def _source_with_schema(isc, name: str):
 
 
 def _migration(args) -> int:
-    from isc_reporter import identity_profiles, source_migration
+    from isc_reporter import criteria, identity_profiles, source_migration
     from isc_reporter.source_migration import Source
 
     if args.source:
         profiles, transforms = identity_profiles.load_files(args.source)
         old, new = Source(args.old_source), Source(args.new_source)
+        objects = criteria.load_files(args.source)
     else:
         isc = _connect(args)
         profiles, transforms, _ = identity_profiles.fetch(isc)
         old = _source_with_schema(isc, args.old_source)
         new = _source_with_schema(isc, args.new_source)
+        objects = criteria.fetch(isc)
+    for note in objects.notes:
+        log.warning("%s", note)
     plan = source_migration.analyse(profiles, transforms, old, new,
                                     source_migration.read_attribute_map(args.attribute_map),
-                                    in_place=args.in_place, suffix=args.suffix)
+                                    in_place=args.in_place, suffix=args.suffix, objects=objects)
     folder = args.output or output_path(args.output_dir, "source-migration", "")
     workbook = source_migration.write_outputs(plan, folder, pdf=not args.no_pdf)
     to_define = sum(info["status"].startswith("TO DEFINE") for info in plan.attributes.values())
     log.info("%d identity profile(s), %d transform(s) and %d source attribute(s) impacted; "
              "%d attribute(s) still to define", len(plan.profiles), len(plan.transforms),
              len(plan.attributes), to_define)
+    log.info("%d criteria to review (roles, dimensions, segments, correlation)", len(plan.criteria))
     log.info("Analysis: %s", workbook)
     log.info("Drafts and attribute-mapping.csv: %s", folder)
     return 0
@@ -237,9 +245,10 @@ def _sync(args) -> int:
                  source.name, len(policies), len(found))
         mappings = sync_impact.merge(found, explicit)
     if not mappings:
-        raise UsageError(f"{source.name} has no {'/'.join(args.usage)} provisioning policy field mapped "
-                         "directly to an identity attribute; give one with "
-                         "--map identityAttribute=accountAttribute")
+        if args.only_map:
+            raise UsageError("--only-map needs at least one --map or a --map-file")
+        raise UsageError(sync_impact.nothing_to_compare(source.name, policies, args.usage, ignored,
+                                                        bool(getattr(source, "authoritative", False))))
     accounts = sync_impact.fetch_accounts(isc, source.id)
     log.info("%d account(s) read from %s", len(accounts), source.name)
     identities = sync_impact.fetch_identities(isc, [a["identityId"] for a in accounts if a.get("identityId")])
@@ -257,6 +266,32 @@ def _sync(args) -> int:
         log.info("%s: %s", fmt.upper(), path)
     log.info("%s: %d of %d account(s) would be updated (%.1f%%), %d attribute update(s)", result.verdict,
              result.impacted, result.analysed, result.share, sum(s.updates for s in result.stats.values()))
+    return 0
+
+
+def _leavers(args) -> int:
+    from isc_reporter import leavers
+
+    if args.grace and not args.date_attribute:
+        raise UsageError("--grace needs --date-attribute (the identity attribute holding the departure date)")
+    isc = _connect(args)
+    data = leavers.fetch(isc, args.states, args.exclude_source, args.include_authoritative,
+                         args.date_attribute or "", args.grace)
+    for note in data.notes:
+        log.warning("%s", note)
+    result = leavers.analyse(data)
+    base = _base(args, "leavers")
+    for fmt in dict.fromkeys(args.format):
+        path = base + "." + fmt
+        if fmt == "xlsx":
+            leavers.write_xlsx(path, result, args.title or "")
+        elif fmt == "pdf":
+            leavers.write_pdf(path, result, args.title or "", args.pdf_max_rows)
+        else:
+            leavers.write_csv(path, result)
+        log.info("%s: %s", fmt.upper(), path)
+    log.info("%d of %d leaver(s) still have %d enabled account(s)", len(result.leavers), result.total,
+             len(result.accounts))
     return 0
 
 
@@ -284,9 +319,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="isc-reporter",
-        description="Reports and analysis for SailPoint Identity Security Cloud: Excel dashboards and "
-                    "PDF from search, certification campaigns, identity attribute history, identity "
-                    "profile mappings and source migrations.",
+        description="Reports and change-impact analysis for SailPoint Identity Security Cloud: search, "
+                    "certification campaigns, identity attribute history, identity profile mappings, "
+                    "leavers who still have access, source migrations and attribute sync forecasts. "
+                    "Read-only.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -348,8 +384,9 @@ def build_parser() -> argparse.ArgumentParser:
     formats(p)
     output(p)
 
-    p = command("profiles", _profiles, "Identity profile mappings: how every identity attribute is "
-                                       "built, with sources, transforms and checks.")
+    p = command("identity-profiles", _profiles, "Identity profile mappings: how every identity attribute "
+                                                "is built, where it is used, with sources, transforms and "
+                                                "checks.", aliases=["profiles"])
     p.add_argument("--from", dest="source", nargs="+", metavar="PATH",
                    help="exported JSON files or folders instead of the tenant")
     p.add_argument("--profile", action="append", metavar="NAME", help="only this profile (repeatable)")
@@ -385,6 +422,26 @@ def build_parser() -> argparse.ArgumentParser:
                    help="share of accounts to update that is flagged as a bulk update (default 10)")
     p.add_argument("--max-details", type=int, default=100_000, help="rows in the Accounts and Changes "
                                                                     "sheets (the CSV has them all)")
+    p.add_argument("--title", help="report title")
+    p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
+    formats(p)
+    output(p)
+
+    p = command("leavers", _leavers, "Leavers who still have access: identities in a leaver lifecycle "
+                                     "state with enabled accounts, and whether the state should have "
+                                     "disabled them.")
+    p.add_argument("--states", nargs="+", metavar="STATE",
+                   help="leaver lifecycle states (technical names); default: the states configured as "
+                        "inactive")
+    p.add_argument("--exclude-source", action="append", metavar="NAME",
+                   help="ignore this source (repeatable)")
+    p.add_argument("--include-authoritative", action="store_true",
+                   help="also list accounts of authoritative sources (left out by default)")
+    p.add_argument("--date-attribute", metavar="ATTRIBUTE",
+                   help="identity attribute holding the departure date (e.g. endDate), for the days "
+                        "since leaving")
+    p.add_argument("--grace", type=int, default=0, metavar="DAYS",
+                   help="days allowed to revoke access after the departure date (with --date-attribute)")
     p.add_argument("--title", help="report title")
     p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
     formats(p)

@@ -31,8 +31,8 @@ class FakeIsc:
     """Stands in for :class:`isc_reporter.client.Isc`."""
 
     APIS = ("accounts", "campaigns", "campaign_filters", "certifications", "certification_summaries",
-            "identity_attributes", "identity_history", "identity_profiles", "search", "sources",
-            "transforms")
+            "dimensions", "identity_attributes", "identity_history", "identity_profiles", "lifecycle_states",
+            "roles", "search", "segments", "sources", "transforms")
 
     def __init__(self, **apis):
         for name in self.APIS:

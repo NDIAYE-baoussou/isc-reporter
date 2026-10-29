@@ -228,6 +228,42 @@ def sample_policies() -> list[dict]:
     ]
 
 
+def sample_criteria():
+    """Roles, a segment and source correlations of the fictional tenant, some using HR attributes."""
+    from isc_reporter.criteria import Objects
+
+    def leaf(attribute, value, kind="IDENTITY", source=None):
+        key = {"type": kind, "property": f"attribute.{attribute}", **({"sourceId": source} if source else {})}
+        return {"operation": "EQUALS", "key": key, "stringValue": value}
+
+    def role(name, criteria, enabled=True, **extra):
+        membership = {"type": "STANDARD", "criteria": criteria} if criteria else None
+        return {"id": name, "name": name, "enabled": enabled, "membership": membership, **extra}
+
+    roles = [
+        role("Finance Analyst", {"operation": "AND", "children": [
+            leaf("department", "Finance"), leaf("cloudLifecycleState", "active")]}),
+        role("HR Partner", {"operation": "OR", "children": [
+            leaf("department", "HR"), leaf("jobCode", "HRBP", "ACCOUNT", "HR System")]}),
+        role("Remote Access", leaf("location", "Remote")),
+        role("Sales Legacy", leaf("department", "Sales"), enabled=False),
+        role("Regional Access", None, dimensional=True, dimensions=[
+            {"id": "Operations", "name": "Operations", "parentId": "Regional Access",
+             "membership": {"type": "STANDARD", "criteria": leaf("department", "Operations")}}]),
+    ]
+    segments = [{"id": "Finance applications", "name": "Finance applications", "active": True,
+                 "visibilityCriteria": {"expression": {"operator": "EQUALS", "attribute": "department",
+                                                       "value": {"type": "STRING", "value": "Finance"}}}}]
+    sources = [
+        {"id": "Active Directory", "name": "Active Directory", "correlationConfig": {
+            "attributeAssignments": [{"property": "uid", "value": "employeeID", "operation": "EQ"}]}},
+        {"id": "HR System", "name": "HR System", "correlationConfig": {
+            "attributeAssignments": [{"property": "uid", "value": "employeeId", "operation": "EQ"}]},
+         "managerCorrelationMapping": {"accountAttributeName": "managerId", "identityAttributeName": "uid"}},
+    ]
+    return Objects(roles, segments, sources)
+
+
 def sample_profiles() -> tuple[list[dict], dict[str, dict]]:
     def account(attribute, source="HR System"):
         return {"type": "accountAttribute", "attributes": {"sourceName": source, "attributeName": attribute}}
@@ -311,15 +347,78 @@ def sample_profiles() -> tuple[list[dict], dict[str, dict]]:
     return [employees, contractors], transforms
 
 
+def sync_accounts(rng: random.Random, people: list[dict]) -> tuple[list[dict], dict[str, dict]]:
+    """Active Directory accounts of the fictional identities, some of them out of date, and the
+    identities (by id) as the attribute synchronization forecast reads them."""
+    accounts, by_id = [], {}
+    for person in people:
+        if not any(a["source"]["name"] == "Active Directory" for a in person["accounts"]):
+            continue
+        identity = person
+        mail, department, display = person["email"], person["attributes"]["department"], person["displayName"]
+        roll = rng.random()
+        if roll < 0.12:                                    # moved, but AD was never updated
+            department = rng.choice([d for d in DEPARTMENTS if d != department])
+        elif roll < 0.16:
+            mail = mail.upper()
+        elif roll < 0.22:                                  # display name never filled in AD
+            display = ""
+        elif roll < 0.24:                                  # department lost in HR: AD would be cleared
+            attributes = {k: v for k, v in person["attributes"].items() if k != "department"}
+            identity = {**person, "attributes": attributes}
+        by_id[person["id"]] = identity
+        accounts.append({
+            "id": _id(rng), "name": person["name"], "identityId": person["id"],
+            "nativeIdentity": f"CN={person['displayName']},OU=Users,DC=example,DC=com",
+            "disabled": bool(person.get("inactive")),
+            "attributes": {"mail": mail, "department": department, "displayName": display},
+        })
+    for name in ("svc-backup", "test.user01", "old.contractor"):     # no identity: left out
+        accounts.append({"id": _id(rng), "name": name, "identityId": None, "uncorrelated": True,
+                         "nativeIdentity": f"CN={name},OU=Service,DC=example,DC=com",
+                         "attributes": {"department": "IT", "displayName": name}})
+    return accounts, by_id
+
+
+def sample_leavers(rng: random.Random, people: list[dict], today):
+    """The fictional identities in the 'inactive' state, some of their accounts still enabled, and
+    lifecycle states that disable Active Directory and SAP for employees, everything for contractors."""
+    from isc_reporter.leavers import LeaverData
+
+    def inactive(*actions):
+        return {"inactive": {"technicalName": "inactive", "identityState": "INACTIVE_SHORT_TERM",
+                             "accountActions": list(actions)}}
+
+    lifecycle = {"Employees": inactive({"action": "DISABLE", "sourceIds": ["Active Directory", "SAP"]}),
+                 "Contractors": inactive({"action": "DISABLE", "allSources": True})}
+    identities = []
+    for person in people:
+        if person["attributes"]["cloudLifecycleState"] != "inactive":
+            continue
+        profile = person["identityProfile"]["name"]
+        left = today - timedelta(days=rng.randint(1, 60))
+        accounts = [{"id": _id(rng), "name": a["name"], "accountId": a["name"],
+                     "source": {"id": a["source"]["name"], "name": a["source"]["name"]},
+                     "disabled": rng.random() < 0.6, "privileged": rng.random() < 0.08}
+                    for a in person["accounts"]]
+        identities.append({**person, "identityProfile": {"id": profile, "name": profile},
+                           "attributes": {**person["attributes"], "endDate": left.isoformat()},
+                           "accounts": accounts})
+    return LeaverData(["inactive"], identities, lifecycle, {name: name for name in lifecycle}, {},
+                      "endDate", 3, today, origin="demo")
+
+
 def run(folder: str) -> list[str]:
     """Write every sample report into *folder*; returns the files written."""
     from isc_reporter import (
         attribute_history,
         certification_reports,
         identity_profiles,
+        leavers,
         report_writers,
         reporting,
         source_migration,
+        sync_impact,
     )
     from isc_reporter.source_migration import Source
 
@@ -364,6 +463,20 @@ def run(folder: str) -> list[str]:
         Source("HR System"),
         Source("New HR", "", ["employeeId", "givenName", "surname", "hireDate", "department"]),
         {"managerId": "manager_id"},
+        objects=sample_criteria(),
     )
     out.append(source_migration.write_outputs(plan, os.path.join(folder, "source-migration")))
+    mappings, ignored = sync_impact.policy_mappings(sample_policies())
+    accounts, synced = sync_accounts(random.Random(11), people)
+    forecast = sync_impact.analyse("Active Directory", accounts, synced, mappings, ignored)
+    base = os.path.join(folder, "sync-impact")
+    out += [
+        sync_impact.write_xlsx(base + ".xlsx", forecast, "demo"),
+        sync_impact.write_pdf(base + ".pdf", forecast, "demo"),
+        sync_impact.write_csv(base + ".csv", forecast),
+    ]
+    residual = leavers.analyse(sample_leavers(random.Random(13), people, now.date()))
+    base = os.path.join(folder, "leavers")
+    out += [leavers.write_xlsx(base + ".xlsx", residual), leavers.write_pdf(base + ".pdf", residual),
+            leavers.write_csv(base + ".csv", residual)]
     return out
