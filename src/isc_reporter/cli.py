@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import time
+import warnings
 
 from isc_reporter import __version__
 from isc_reporter.csvio import output_path
@@ -504,6 +505,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     setup_logging(args.log_level, args.log_dir or None)
+    # The SDK warns about every value of the tenant it does not know yet (new source features...).
+    warnings.filterwarnings("ignore", message=".*must be one of", module=r"sailpoint\.")
     started = time.monotonic()
     try:
         return args.func(args)

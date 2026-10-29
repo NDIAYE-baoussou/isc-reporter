@@ -68,10 +68,11 @@ def build(profiles: list[dict], all_rows: list[list[dict]], transforms: dict[str
         if node_id not in graph.nodes:
             definition = transforms.get(name)
             kind = (definition or {}).get("type", "")
-            graph.nodes[node_id] = {
-                "id": node_id, "kind": TRANSFORM if definition else MISSING, "label": name, "type": kind,
-                "what": f"{kind}: {describe_type(kind)}" if definition
-                else "not found in the tenant or export"}
+            what = (f"{kind}: {describe_type(kind)}" if definition else
+                    "reference without id: it calls no named transform" if name == transform_tree.NO_ID else
+                    "not found in the tenant or export")
+            graph.nodes[node_id] = {"id": node_id, "kind": TRANSFORM if definition else MISSING,
+                                    "label": name, "type": kind, "what": what}
         return node_id
 
     def attribute(profile: str, row: dict) -> str:
@@ -121,7 +122,10 @@ def tree(graph: Graph, node_id: str, role: str = "", seen: tuple[str, ...] = (),
          profile: str | None = None) -> transform_tree.Node:
     """What *node_id* depends on, as a tree: the transforms it calls or uses, the attributes it reads.
     Below an identity attribute, only the attributes of its own profile are read."""
-    info = graph.nodes[node_id]
+    info = graph.nodes.get(node_id)
+    if info is None:          # not expected: drawn as not found rather than failing the whole report
+        return transform_tree.Node(node_id.split(":", 1)[-1], "not found", role=role,
+                                   kind=transform_tree.MISSING)
     if info["kind"] == ATTRIBUTE:
         profile = info["profile"]
     label = f"{info['label']} ({info['profile']})" if info["kind"] == ATTRIBUTE and seen else info["label"]

@@ -101,3 +101,29 @@ def test_workbook_and_pdf(tmp_path):
     assert transforms["Accents"]["Called by"] == "Name"
     assert transforms["Loop A"]["Uses"] == 0                     # not used, listed all the same
     assert identity_profiles.write_pdf(str(tmp_path / "mappings.pdf"), PROFILES, TRANSFORMS) == 2
+
+
+def test_references_without_id_do_not_stop_the_report(tmp_path):
+    from isc_reporter import mappings_html
+
+    transforms = {**TRANSFORMS,
+                  "Broken": {"name": "Broken", "type": "upper", "attributes": {"input": {
+                      "type": "reference", "attributes": {"id": ""}}}},
+                  "Odd": {"name": "Odd", "type": "lower", "attributes": ["not", "an", "object"]}}
+    profiles = [profile("Employees", 10, [("title", {"type": "reference", "attributes": {}}),
+                                          ("department", reference("Broken")), ("code", reference("Odd"))])]
+    # 0.4.0 stopped here with KeyError: 't:?'
+    identity_profiles.write_xlsx(str(tmp_path / "m.xlsx"), profiles, transforms)
+    identity_profiles.write_pdf(str(tmp_path / "m.pdf"), profiles, transforms)
+    mappings_html.write_html(str(tmp_path / "m.html"), profiles, transforms)
+    book = load_workbook(str(tmp_path / "m.xlsx"))
+    checks = {(r[2], r[3]) for r in book["Checks"].iter_rows(min_row=2, values_only=True)}
+    assert {("title", "Reference without id"), ("department", "Reference without id")} <= checks
+    analysed, rows, _ = identity_profiles.analyse(profiles, transforms)
+    found = transform_graph.build(analysed, rows, transforms)
+    node = found.nodes["t:" + transform_tree.NO_ID]
+    assert (node["kind"], node["what"]) == (transform_graph.MISSING,
+                                            "reference without id: it calls no named transform")
+    assert ("t:" + transform_tree.NO_ID, "t:Broken", "calls") in {(e["from"], e["to"], e["kind"])
+                                                                   for e in found.edges}
+    assert transform_graph.tree(found, "t:gone").what == "not found"                  # never fails

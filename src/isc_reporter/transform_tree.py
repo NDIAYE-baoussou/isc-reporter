@@ -53,6 +53,9 @@ IGNORED_KEYS = {"requiresPeriodicRefresh"}
 ATTRIBUTE, ACCOUNT, IDENTITY, VALUE = "attribute", "account", "identity", "value"
 NAMED, MISSING, TRANSFORM, RULE = "named", "missing", "transform", "rule"
 
+# A reference transform names the transform it calls in "id"; one without is shown under this name.
+NO_ID = "(reference without id)"
+
 # Line prefixes: (child, last child, below a child, below the last child).
 BOX = ("├─ ", "└─ ", "│  ", "   ")
 # For PDF fonts without box drawing characters; non-breaking spaces keep the indentation.
@@ -61,6 +64,18 @@ PLAIN = ("› ", "› ", " " * 4, " " * 4)
 
 def describe_type(kind: str) -> str:
     return TRANSFORM_TYPES.get(kind, f"'{kind}' transform")
+
+
+def attributes_of(definition: dict) -> dict:
+    """The ``attributes`` of a transform definition, or ``{}`` when they are missing or not an object."""
+    attributes = definition.get("attributes")
+    return attributes if isinstance(attributes, dict) else {}
+
+
+def reference_name(attrs: dict) -> str:
+    """The named transform a reference calls: its ``id``, or :data:`NO_ID` when it has none."""
+    name = attrs.get("id")
+    return str(name) if name else NO_ID
 
 
 @dataclass
@@ -82,7 +97,7 @@ def build(definition, transforms: dict[str, dict], role: str = "", seen: tuple[s
     """The tree of a transform definition; named transforms are expanded from *transforms*."""
     if not _is_transform(definition):
         return Node(_value(definition), "fixed value", role=role, kind=VALUE)
-    kind, attrs = definition["type"], definition.get("attributes") or {}
+    kind, attrs = definition["type"], attributes_of(definition)
     if depth > MAX_DEPTH:
         return Node(kind, "not drawn further (too deep)", role=role)
     if kind == "accountAttribute":
@@ -119,12 +134,14 @@ def build(definition, transforms: dict[str, dict], role: str = "", seen: tuple[s
 
 def _reference(attrs: dict, transforms: dict[str, dict], role: str, seen: tuple[str, ...],
                depth: int) -> Node:
-    name = attrs.get("id", "?")
+    name = reference_name(attrs)
     node = Node(name, role=role, kind=NAMED)
     if "input" in attrs:
         node.children.append(build(attrs["input"], transforms, "input", seen, depth + 1))
     target = transforms.get(name)
-    if name in seen:
+    if name == NO_ID:
+        node.what, node.kind = "reference without id: it calls no named transform", MISSING
+    elif name in seen:
         node.what = "named transform, already drawn above: it calls itself"
     elif target is None:
         node.what = "named transform, not found in the tenant or export" if transforms else "named transform"
@@ -154,8 +171,8 @@ def calls(definition) -> list[str]:
         for item in definition:
             found += calls(item)
     elif isinstance(definition, dict):
-        if definition.get("type") == "reference" and (definition.get("attributes") or {}).get("id"):
-            found.append(definition["attributes"]["id"])
+        if definition.get("type") == "reference":
+            found.append(reference_name(attributes_of(definition)))
         for value in definition.values():
             found += calls(value)
     return list(dict.fromkeys(found))

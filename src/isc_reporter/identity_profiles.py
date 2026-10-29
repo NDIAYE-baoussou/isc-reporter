@@ -178,7 +178,7 @@ class _Walk:
             return ", ".join(self.text(item, depth) for item in node)
         if not isinstance(node, dict) or "type" not in node:
             return json.dumps(node, ensure_ascii=False) if not isinstance(node, str) else f'"{node}"'
-        kind, attrs = node["type"], node.get("attributes") or {}
+        kind, attrs = node["type"], transform_tree.attributes_of(node)
         if depth > MAX_DEPTH:
             return f"{kind}(…)"
         if kind == "accountAttribute":
@@ -194,7 +194,7 @@ class _Walk:
         if kind == "rule":
             return f"rule '{attrs.get('name', '?')}'"
         if kind == "reference":
-            name = attrs.get("id", "?")
+            name = transform_tree.reference_name(attrs)
             if name not in self.used:
                 self.used.append(name)
             inner = self.text(attrs["input"], depth + 1) if "input" in attrs else ""
@@ -202,7 +202,7 @@ class _Walk:
             if definition is not None:
                 # Follow the referenced transform to find the account attributes it reads itself.
                 self.text(definition, depth + 1)
-            elif self.transforms and name not in self.missing:
+            elif (self.transforms or name == transform_tree.NO_ID) and name not in self.missing:
                 self.missing.append(name)
             return f"{name}({inner})"
         args = []
@@ -225,7 +225,7 @@ def explain(definition: dict, walk: _Walk) -> str:
     """The mapping in one plain sentence."""
     if not definition:
         return "Not mapped."
-    kind, attrs = definition.get("type", ""), definition.get("attributes") or {}
+    kind, attrs = definition.get("type", ""), transform_tree.attributes_of(definition)
     reads = ", ".join(f"'{attribute}' from {source}" for source, attribute in walk.leaves)
     if kind == "accountAttribute" and walk.leaves:
         source, attribute = walk.leaves[0]
@@ -240,7 +240,7 @@ def explain(definition: dict, walk: _Walk) -> str:
     if kind == "rule":
         return f"Computed by the rule '{attrs.get('name', '?')}'."
     if kind == "reference":
-        name = attrs.get("id", "?")
+        name = transform_tree.reference_name(attrs)
         known = walk.transforms.get(name)
         what = f" ({describe_type(known.get('type', ''))})" if known else ""
         if "input" in attrs:
@@ -268,8 +268,13 @@ def mapping_rows(profile: dict, transforms: dict[str, dict] | None = None,
         if not definition:
             checks.append((WARNING, "Not mapped", "The attribute has no mapping."))
         for missing in walk.missing:
-            checks.append((WARNING, "Missing transform",
-                           f"The transform '{missing}' does not exist in the tenant/export."))
+            if missing == transform_tree.NO_ID:
+                checks.append((WARNING, "Reference without id",
+                               "A reference transform has no 'id', so it calls no named transform: give it "
+                               "the name of the transform to call, or remove it."))
+            else:
+                checks.append((WARNING, "Missing transform",
+                               f"The transform '{missing}' does not exist in the tenant/export."))
         other = [s for s in sources if authoritative and s != authoritative]
         if other:
             checks.append((INFO, "Other source", f"Reads {', '.join(other)}, not the authoritative "
