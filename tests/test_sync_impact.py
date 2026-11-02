@@ -103,6 +103,30 @@ def test_analyse_counts_updates_per_account_and_attribute():
     assert cleared.mapping.account_attribute == "title"
 
 
+def test_attributes_never_synchronised_can_be_excluded(tmp_path):
+    mappings, ignored = sync_impact.policy_mappings(POLICIES)
+    mappings += sync_impact.parse_maps(["location=physicalDeliveryOfficeName"])
+    kept, others, excluded, unmatched = sync_impact.exclude(
+        ["TITLE", "email=mail", "physical*", "cn", "nothing*"], mappings, ignored)
+    assert [m.account_attribute for m in kept] == ["department"]
+    assert [item["Field"] for item in others] == ["info"]
+    assert [(row["Account attribute"], row["Excluded by"]) for row in excluded] == [
+        ("mail", "email=mail"), ("title", "TITLE"), ("physicalDeliveryOfficeName", "physical*"), ("cn", "cn")]
+    assert excluded[3]["From"] == "CREATE policy (rule)" and unmatched == ["nothing*"]
+    assert not sync_impact.excludes("email=sn", "email", "mail")          # a pair names both sides
+    assert sync_impact.excludes("LASTNAME", "lastname", "sn")             # or an identity attribute
+
+    result = sync_impact.analyse("AD", ACCOUNTS, IDENTITIES, kept, others, excluded=excluded)
+    assert list(result.stats) == kept and result.verdict == "No update expected"  # title is not cleared
+    found = {check: details for _, _, check, details in sync_impact.checks(result)}
+    assert found["Attributes excluded"] == (
+        "4 attribute(s) left out with --exclude, as they will never be synchronised: mail, title, "
+        "physicalDeliveryOfficeName, cn (see the Excluded sheet).")
+    path = str(tmp_path / "r.xlsx")
+    sync_impact.write_xlsx(path, result)
+    assert load_workbook(path).sheetnames[4:6] == ["Not analysed", "Excluded"]
+
+
 def test_no_difference_means_no_update():
     mappings = sync_impact.parse_maps(["email=mail"])
     result = sync_impact.analyse("AD", ACCOUNTS[:1], IDENTITIES, mappings)
@@ -147,7 +171,7 @@ def fake_isc(accounts=ACCOUNTS, policies=POLICIES):
 
 def test_cli(tmp_path, monkeypatch):
     isc = fake_isc()
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: isc)
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: isc)
     out = tmp_path / "impact"
     args = ["analyzebeforesync", "AD", "--format", "xlsx", "csv", "-o", str(out), "--log-dir", ""]
     assert cli.main(args) == 0
@@ -157,8 +181,23 @@ def test_cli(tmp_path, monkeypatch):
     assert query.startswith("id:(") and '"i1"' in query and "None" not in query
 
 
+def test_cli_excludes_attributes(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: fake_isc())
+    never = tmp_path / "never-synced.txt"
+    never.write_text("# never synchronised to AD\ntitle\n\n", encoding="utf-8")
+    base = ["analyze-before-sync", "AD", "--format", "xlsx", "-o", str(tmp_path / "x"), "--log-dir", ""]
+    assert cli.main([*base, "--exclude", "mail,typo", "--exclude-file", str(never)]) == 0
+    err = capsys.readouterr().err
+    assert "Excluded, as never synchronised: mail, title" in err
+    assert "--exclude typo matches no attribute" in err
+    sheet = load_workbook(str(tmp_path / "x.xlsx"))["Excluded"]
+    assert [row[0] for row in sheet.iter_rows(values_only=True)] == ["Account attribute", "mail", "title"]
+    assert cli.main([*base, "--exclude", "*"]) == 2                          # nothing left to compare
+    assert cli.main([*base, "--exclude-file", str(tmp_path / "missing.txt")]) == 2
+
+
 def test_cli_without_any_direct_mapping_asks_for_a_map(tmp_path, monkeypatch):
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: fake_isc(policies=[]))
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: fake_isc(policies=[]))
     base = ["analyze-before-sync", "AD", "--format", "csv", "-o", str(tmp_path / "x"), "--log-dir", ""]
     assert cli.main(base) == 2
     assert cli.main([*base, "--only-map"]) == 2                 # nothing to compare at all

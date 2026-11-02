@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "isc-reporter"
 dynamic = ["version"]
-description = "Reports and change-impact analysis for SailPoint Identity Security Cloud: search, certification campaigns, identity attribute history, identity attribute mappings and transform dependencies, leavers with access, source migrations, attribute sync and role enablement forecasts. Read-only."
+description = "Reports and change-impact analysis for SailPoint Identity Security Cloud: search, certification campaigns, identity attribute history, source status and capabilities, identity attribute mappings and transform dependencies, transform analysis with optimized drafts and an optimization plan, leavers with access, source migrations, attribute sync and role enablement forecasts, configuration snapshots. Read-only."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Ousmane N'Diaye" }]
 keywords = ["sailpoint", "identity-security-cloud", "identitynow", "iam", "iga", "reporting",
-            "excel", "pdf", "certification", "audit"]
+            "excel", "pdf", "certification", "audit", "transforms", "snapshot"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -32,6 +32,7 @@ dependencies = [
     "sailpoint>=2.1,<3",
     "XlsxWriter>=3.1",
     "reportlab>=4",
+    "keyring>=24",
 ]
 
 [project.optional-dependencies]

@@ -17,7 +17,7 @@ import os
 from collections import Counter
 from dataclasses import dataclass, field
 
-from isc_reporter import attribute_usage, dashboard, transform_graph, transform_tree
+from isc_reporter import attribute_usage, dashboard, lifecycle, transform_graph, transform_tree
 from isc_reporter.api import error_message
 from isc_reporter.errors import UsageError
 from isc_reporter.transform_tree import describe_type
@@ -94,11 +94,22 @@ def load_files(paths: list[str]) -> tuple[list[dict], dict[str, dict]]:
         for obj in _objects(data):
             if "identityAttributeConfig" in obj:
                 profiles.append(obj)
-            elif obj.get("type") and "attributes" in obj and obj.get("name"):
+            elif is_transform(obj):
                 transforms[obj["name"]] = obj
     if not profiles:
         raise UsageError("no identity profile found in the given files")
     return profiles, transforms
+
+
+def is_transform(obj: dict) -> bool:
+    """A named transform, not a connector rule (which also has a name, a type and attributes)."""
+    return bool(obj.get("type") and "attributes" in obj and obj.get("name")) and "sourceCode" not in obj
+
+
+def load_names(paths: list[str]) -> dict[str, str]:
+    """Display names of the identity attributes found in exported files (e.g. a snapshot)."""
+    return {obj["name"]: obj.get("displayName") or "" for obj in iter_objects(paths)
+            if obj.get("name") and "displayName" in obj and "standard" in obj and "system" in obj}
 
 
 def _objects(data):
@@ -214,6 +225,11 @@ class _Walk:
             elif key != "requiresPeriodicRefresh":
                 args.append(f"{key}={self.text(value, depth + 1)}")
         return f"{kind}({', '.join(args)})"
+
+
+def logic(definition, transforms: dict[str, dict] | None = None) -> str:
+    """Short readable form of a transform definition, e.g. ``lower(HR.firstname)``."""
+    return _Walk(transforms or {}).text(definition) if definition else ""
 
 
 def kind_of(definition: dict) -> str:
@@ -344,8 +360,10 @@ def profile_checks(profile: dict, rows: list[dict]) -> list[tuple[str, str, str,
 # -- rendering ------------------------------------------------------------------
 
 RESERVED_SHEETS = {"Dashboard", "Profiles", "Matrix", "Coverage", "Attribute usage", "Usage detail",
-                   "Transforms", "Transform dependencies", "Checks", "Chart data", "Read me"}
+                   "Transforms", "Transform dependencies", "Lifecycle states", "Lifecycle by source",
+                   "Checks", "Chart data", "Read me"}
 SEVERITY_FILLS = {WARNING: "F8CBAD", INFO: "DDEBF7"}
+LIFECYCLE_FILLS = {"Enable": "E2EFDA", "Disable": "FFE0B2", "Delete": "F8CBAD"}
 # KINDS colours are pale cell backgrounds; charts use strong ones.
 CHART_COLOURS = {"Direct copy": dashboard.GREEN, "Named transform": dashboard.BLUE,
                  "Inline transform": "8E24AA", "Static value": dashboard.AMBER,
@@ -371,6 +389,11 @@ READ_ME = [
                                "calls the transform), 'calls' (a transform calls another one) and 'reads' (a "
                                "transform reads an identity attribute, itself computed by other "
                                "transforms). Use the + and - buttons on the left to fold a tree."),
+    ("Lifecycle states", "Each lifecycle state of each profile and what it provisions when an identity "
+                         "enters it: the accounts enabled, disabled or deleted (on which sources), the "
+                         "access profiles granted, whether all access is removed, and who is notified."),
+    ("Lifecycle by source", "One line per source, one column per lifecycle state: what the state does to the "
+                            "accounts of the source. An action on all sources applies to every source."),
     ("Checks", "Points worth a look: Warning = probably wrong, Info = good to know."),
     *[(f"Column: {HEADERS[c]}", COLUMN_HELP[c]) for c in MAPPING_COLUMNS],
     *[(f"Mapping kind: {label}", meaning) for label, _, meaning in KINDS.values()],
@@ -410,10 +433,15 @@ def analyse(profiles: list[dict], transforms: dict[str, dict] | None = None,
 def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = None,
                     display_names: dict[str, str] | None = None, origin: str = "",
                     title: str = "Identity attribute mappings",
-                    policies: list[dict] | None = None) -> dashboard.Dashboard:
+                    policies: list[dict] | None = None,
+                    states: lifecycle.Lifecycle | None = None) -> dashboard.Dashboard:
+    """The mappings workbook; with *states*, also the lifecycle states of the profiles."""
     transforms = transforms or {}
     profiles, all_rows, usages = analyse(profiles, transforms, display_names, policies)
-    all_checks = [profile_checks(p, rows) for p, rows in zip(profiles, all_rows, strict=True)]
+    all_checks = [profile_checks(p, rows) + (lifecycle.checks(p, states, transforms) if states else [])
+                  for p, rows in zip(profiles, all_rows, strict=True)]
+    if states and all_checks:
+        all_checks[0] += [(INFO, "", "Lifecycle states not fully read", note) for note in states.notes]
     names = [p.get("name", "") for p in profiles]
     kind_colours = {label: colour for label, colour, _ in KINDS.values()}
     profile_rows = _profile_rows(profiles, all_rows, all_checks)
@@ -438,6 +466,13 @@ def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = N
                                   wide=WIDE, mono={"Depends on"}))
     tables.append(dashboard.Table("Transform dependencies", transform_graph.rows(graph, profiles, all_rows),
                                   wide=WIDE | {"Used by", "What it is"}, mono={"Tree"}, outline="Level"))
+    if states is not None:
+        state_rows = lifecycle.state_rows(profiles, states)
+        tables.append(dashboard.Table("Lifecycle states", state_rows, wide=WIDE | {
+            "Accounts", "Access profiles granted", "Notified"}, red_yes={"Remove all access"}))
+        by_source = lifecycle.source_rows(profiles, states)
+        tables.append(dashboard.Table("Lifecycle by source", by_source,
+                                      fills={column: LIFECYCLE_FILLS for column in (by_source or [{}])[0]}))
     tables.append(dashboard.Table("Checks", check_rows, wide=WIDE, fills={"Severity": SEVERITY_FILLS}))
 
     sections = [
@@ -452,16 +487,25 @@ def build_dashboard(profiles: list[dict], transforms: dict[str, dict] | None = N
             {"Identity attribute": r["identity_attribute"], "Mapping": r["mapping"],
              "Explanation": r["explanation"], "Points to check": r["notes"]} for r in rows],
             ["Identity attribute", "Mapping", "Explanation", "Points to check"]))
+    if states:
+        sections.append(dashboard.Section("Lifecycle states", lifecycle.state_rows(profiles, states), [
+            "Identity profile", "Lifecycle state", "Identity state", "Accounts", "Access profiles granted",
+            "Remove all access"]))
     dependencies = transform_graph.rows(graph, profiles, all_rows, transform_tree.PLAIN)
     if dependencies:
         sections.append(dashboard.Section("Transform dependencies", [
             {**row, "Used by": "" if row["Level"] else row["Used by"]} for row in dependencies],
             ["Used by", "Tree", "What it is"]))
+    kpis = _kpis(profiles, all_rows, all_checks, transforms)
+    if states:
+        count = sum(len(lifecycle.states_of(states, p)) for p in profiles)
+        kpis.insert(4, ("Lifecycle states", str(count), dashboard.BLUE))
     return dashboard.Dashboard(
-        title, dashboard.subtitle(origin), _kpis(profiles, all_rows, all_checks, transforms),
+        title, dashboard.subtitle(origin), kpis,
         _charts(names, all_rows), tables, sections, READ_ME,
         colours={**CHART_COLOURS, WARNING: dashboard.RED, INFO: dashboard.BLUE},
-        wide_pdf={"Profile", "Explanation", "Details", "Points to check", "Authoritative source"},
+        wide_pdf={"Profile", "Explanation", "Details", "Points to check", "Authoritative source", "Accounts",
+                  "Access profiles granted"},
         alert=lambda row: row.get("Severity") == WARNING)
 
 
@@ -586,18 +630,18 @@ def _check_rows(profiles, all_checks) -> list[dict]:
 
 def write_xlsx(path: str, profiles: list[dict], transforms: dict[str, dict] | None = None,
                display_names: dict[str, str] | None = None, origin: str = "",
-               policies: list[dict] | None = None) -> int:
+               policies: list[dict] | None = None, states: lifecycle.Lifecycle | None = None) -> int:
     """Write the mapping workbook; returns the number of profiles documented."""
     dashboard.write_xlsx(build_dashboard(profiles, transforms, display_names, origin,
-                                         policies=policies), path)
+                                         policies=policies, states=states), path)
     return len(profiles)
 
 
 def write_pdf(path: str, profiles: list[dict], transforms: dict[str, dict] | None = None,
               display_names: dict[str, str] | None = None, origin: str = "",
-              policies: list[dict] | None = None) -> int:
+              policies: list[dict] | None = None, states: lifecycle.Lifecycle | None = None) -> int:
     dashboard.write_pdf(build_dashboard(profiles, transforms, display_names, origin,
-                                        policies=policies), path)
+                                        policies=policies, states=states), path)
     return len(profiles)
 
 

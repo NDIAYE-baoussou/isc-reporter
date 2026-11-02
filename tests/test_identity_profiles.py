@@ -199,7 +199,7 @@ def test_cli_from_tenant(tmp_path, monkeypatch, capsys):
     model = IdentityProfile.from_dict(PROFILE)
     isc.identity_profiles.responses["list_identity_profiles_v1"] = \
         lambda limit, offset: [model] if offset == 0 else []
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: isc)
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: isc)
     out = tmp_path / "m.xlsx"
     assert cli.main(["mappings", "-o", str(out), "--log-dir", ""]) == 0
     assert out.exists()

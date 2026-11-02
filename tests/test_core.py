@@ -18,8 +18,9 @@ def test_credentials_from_file_accept_both_key_styles(tmp_path):
     sdk.write_text(json.dumps({"BaseURL": "https://t", "ClientId": "id", "ClientSecret": "s"}))
     legacy = tmp_path / "b.json"
     legacy.write_text(json.dumps({"baseUrl": "https://t", "clientId": "id", "clientSecret": "s"}))
-    assert resolve_credentials(str(sdk)) == ("https://t", "id", "s")
-    assert resolve_credentials(str(legacy)) == ("https://t", "id", "s")
+    assert resolve_credentials(str(sdk))[:3] == ("https://t", "id", "s")
+    assert resolve_credentials(str(legacy))[:3] == ("https://t", "id", "s")
+    assert resolve_credentials(str(sdk)).origin == f"the file {sdk}"
 
 
 def test_credentials_from_env_sdk_names_first(tmp_path, monkeypatch):
@@ -27,9 +28,9 @@ def test_credentials_from_env_sdk_names_first(tmp_path, monkeypatch):
     env = {"SAILPOINT_BASE_URL": "https://old", "SAILPOINT_CLIENT_ID": "o",
            "SAILPOINT_CLIENT_SECRET": "o", "SAIL_BASE_URL": "https://new",
            "SAIL_CLIENT_ID": "n", "SAIL_CLIENT_SECRET": "n"}
-    assert resolve_credentials(environ=env) == ("https://new", "n", "n")
+    assert resolve_credentials(environ=env) == ("https://new", "n", "n", "the SAIL_* environment variables")
     del env["SAIL_CLIENT_SECRET"]
-    assert resolve_credentials(environ=env) == ("https://old", "o", "o")
+    assert resolve_credentials(environ=env)[:3] == ("https://old", "o", "o")
 
 
 def test_credentials_missing(tmp_path, monkeypatch):

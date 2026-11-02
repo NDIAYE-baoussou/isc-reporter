@@ -174,7 +174,7 @@ def test_fetch_and_cli_with_sdk_models(tmp_path, monkeypatch):
                                list_identity_access_review_items_v1=first_page([review])),
         certification_summaries=FakeApi(get_identity_decision_summary_v1=lambda id: summary),
         campaign_filters=FakeApi(list_campaign_filters_v1=lambda **kw: filters))
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: isc)
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: isc)
     out = tmp_path / "report"
     assert cli.main(["campaigns", "--status", "active", "--items", "-o", str(out),
                      "--log-dir", ""]) == 0

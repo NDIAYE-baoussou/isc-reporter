@@ -5,6 +5,69 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `sources`: status and capabilities of every source, one line each. It shows:
+  - health and the status of the virtual appliance cluster;
+  - how ISC provisions the source: its connector, a service desk integration, manual work items, or
+    nothing for an authoritative source it only reads;
+  - its features, provisioning policies, account and manager correlation, attribute synchronization
+    and aggregation schedule;
+  - the last account aggregation, the accounts and the uncorrelated accounts.
+
+  Checks flag sources and clusters in error, failed or old aggregations, a missing schedule or
+  correlation, uncorrelated accounts, high delete thresholds and sources that can provision without
+  an account create policy. `--source` selects sources by name, and `--quick` reads only the source
+  list. The connection settings of the sources are left out.
+
+- `analyze-before-sync`: `--exclude` and `--exclude-file` leave out the attributes that will never
+  be synchronised: account or identity attribute names, with `*` and `?` as wildcards, or
+  `IDENTITY=ACCOUNT` pairs. They are neither compared nor counted in the verdict, and are listed in
+  the new *Excluded* sheet; a name that matches nothing is reported.
+
+- `transforms`: optimization plan for the whole tenant. The new *Optimization plan* sheet lists
+  the suggestions in the order to apply them, with their effect, and the number of custom named
+  transforms now and after the plan. *Cost by profile* counts the transform steps each identity
+  profile runs for one identity and for all its identities, now and with the optimized drafts.
+  New checks: `requiresPeriodicRefresh` set on a value that does not change on its own
+  (*Performance*), and named transforms that apply the same logic to different inputs, which one
+  transform without input can replace (*Same logic*). *Complexity* shows where each named transform
+  is used and for how many identities. `requiresPeriodicRefresh` is also read next to the
+  attributes of a transform.
+
+- `snapshot`: configuration snapshot. Transforms, identity profiles with their lifecycle states,
+  identity attributes, sources with their schemas, provisioning policies and correlation, roles with
+  their dimensions, access profiles, segments, connector rules, workflows, SoD policies, governance
+  groups and password policies, saved as one JSON file per object. Taken again into the same folder,
+  only the files of what changed are rewritten, so the folder can be kept under git as the history of
+  the configuration; `snapshot.json` lists the changes since the previous snapshot. Fields that
+  change on their own are left out and secrets are replaced by `(redacted)`. `mappings`,
+  `transforms` and `migration` run on a snapshot with `--from`; `mappings --from` now takes the
+  display names of the identity attributes from the files, and `migration --from` the account schema
+  of the sources. Connector rules in exported files are no longer read as transforms.
+
+- `mappings`: lifecycle states. The *Lifecycle states* sheet shows what each state of each profile
+  provisions: accounts enabled, disabled or deleted and on which sources, access profiles granted,
+  all access removed, who is notified, identities in the state. *Lifecycle by source* shows, per
+  source, what each state does to its accounts. New checks: values of the `cloudLifecycleState`
+  mapping that are not an enabled state of the profile, leaver states that remove nothing, disabled
+  states that still hold identities, unknown sources and access profiles.
+
+- Environments: `env add`, `env list`, `env use`, `env test`, `env remove`. One environment per
+  tenant (dev, sandbox, prod...), chosen with `--env` or `ISCR_ENV`, or the current one. The client
+  secret is asked for without being shown, checked against the tenant and kept in the credential
+  store of the computer (Windows Credential Manager, macOS Keychain, Secret Service), never in a
+  file. The `SAIL_*` variables still work, for pipelines. New dependency: `keyring`.
+- `config.json` is no longer recommended: it is still read, with a warning, and will be removed.
+  `env import config.json --name <name> --delete` moves its credentials into an environment.
+
+- `transforms`: transform analysis with optimized drafts. Every named transform, identity profile
+  mapping and provisioning policy field is checked against SailPoint's transform guidance: broken
+  references and loops, lookups without default, identity attributes read within profile mappings,
+  a transform reading one source used by profiles of other sources, comparisons with `now` not
+  refreshed, missing fallbacks, duplicates, copies and repeated blocks, needless steps, unused and
+  complex transforms, rules and Velocity logic. The `optimized` folder holds the rewritten transforms,
+  profiles and policies for the changes that give the same result, with `changes.csv` and
+  `delete.csv`. Offline with `--from`.
+
 ## [0.4.1] - 2026-10-29
 
 - Fixed: `mappings` stopped with `KeyError: 't:?'` when a reference transform has no `id`. Such a

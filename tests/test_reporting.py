@@ -148,7 +148,7 @@ def test_search_all_limit_and_id_sort():
 
 def test_cli_report_search(tmp_path, monkeypatch):
     isc = FakeIsc(search=FakeApi(search_post_v1=lambda search, limit: IDENTITIES[:limit]))
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: isc)
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: isc)
     out = tmp_path / "report"
     assert cli.main(["search", "identities", "-q", "attributes.department:Finance",
                      "--expand", "accounts", "--format", "xlsx", "pdf", "csv", "--limit", "2",

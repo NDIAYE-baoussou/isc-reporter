@@ -6,6 +6,7 @@ on every run.
 
 from __future__ import annotations
 
+import copy
 import os
 import random
 from datetime import datetime, timedelta, timezone
@@ -226,6 +227,227 @@ def sample_policies() -> list[dict]:
                 "uid": "manager", "attributeName": "uid"}}},
             {"name": "department", "transform": read("department")}]},
     ]
+
+
+def sample_lifecycle():
+    """Lifecycle states of the two demo profiles: what each one enables, disables or deletes, with
+    a few configuration mistakes for the checks (a leaver state that removes nothing, a disabled state
+    the mapping can return, a source that no longer exists)."""
+    from isc_reporter.lifecycle import Lifecycle
+
+    def state(name, identity_state, count, *actions, enabled=True, granted=(), remove_all=False,
+              notify=("notifyManagers",), priority=10):
+        return {"name": name.title(), "technicalName": name, "enabled": enabled,
+                "identityState": identity_state, "identityCount": count, "priority": priority,
+                "accountActions": list(actions),
+                "accessProfileIds": list(granted),
+                "accessActionConfiguration": {"removeAllAccessEnabled": remove_all},
+                "emailNotificationOption": {key: True for key in notify}}
+
+    def act(action, sources=(), all_sources=False, excluded=()):
+        return {"action": action, "sourceIds": list(sources), "allSources": all_sources,
+                "excludeSourceIds": list(excluded)}
+
+    sources = {name: name for name in ("HR System", "Active Directory", "SAP", "Salesforce",
+                                       "Contractor Register")}
+    employees = [
+        state("prehire", None, 0, enabled=False, notify=(), priority=5),
+        state("active", "ACTIVE", 1754, act("ENABLE", all_sources=True), granted=["birthright"], priority=10),
+        state("inactive", "INACTIVE_SHORT_TERM", 61, act("DISABLE", all_sources=True, excluded=["HR System"]),
+              priority=20),
+        state("gardenLeave", "INACTIVE_SHORT_TERM", 4, priority=30),
+        state("terminated", "INACTIVE_LONG_TERM", 21, act("DELETE", ["Active Directory"]),
+              act("DISABLE", ["SAP", "2c9180835d2e5168015d32f890ca1581"]), remove_all=True,
+              notify=("notifyManagers", "notifyAllAdmins"), priority=40),
+    ]
+    contractors = [
+        state("active", "ACTIVE", 280, act("ENABLE", ["Contractor Register", "Active Directory"]),
+              priority=10),
+        state("inactive", "INACTIVE_SHORT_TERM", 32, act("DISABLE", all_sources=True), priority=20),
+    ]
+    return Lifecycle({"Employees": employees, "Contractors": contractors}, sources,
+                     {"birthright": "Birthright - Active Directory"})
+
+
+def sample_snapshot():
+    """The configuration of the fictional tenant as a snapshot: identity profiles with their lifecycle
+    states, transforms, identity attributes, sources with their provisioning policies and account
+    correlation, roles and a segment. A source holds a password, to show it redacted."""
+    from isc_reporter.identity_profiles import STANDARD_NAMES
+    from isc_reporter.snapshot import Snapshot
+
+    profiles, transforms = sample_profiles()
+    states = sample_lifecycle().states
+    for profile in profiles:
+        profile["lifecycleStates"] = states.get(profile["id"], [])
+    objects = sample_criteria()
+    policies: dict[str, list[dict]] = {}
+    for policy in sample_policies():
+        policies.setdefault(policy["source"], []).append({k: v for k, v in policy.items() if k != "source"})
+    sources = [{**source, "connector": "active-directory" if source["name"] == "Active Directory" else
+                "delimited-file", "provisioningPolicies": policies.get(source["name"], [])}
+               for source in objects.sources]
+    sources[0]["connectorAttributes"] = {"host": "dc01.example.com", "user": "svc-isc@example.com",
+                                         "password": "2:ACP:ZGVtby1vbmx5LW5vdC1hLXNlY3JldA==",
+                                         "encrypted": "password", "healthy": True}
+    attributes = [{"name": name, "displayName": label, "standard": True, "system": False, "type": "string",
+                   "multi": False, "searchable": True} for name, label in STANDARD_NAMES.items()]
+    return Snapshot("demo", {"transforms": list(transforms.values()), "identity-profiles": profiles,
+                             "identity-attributes": attributes, "sources": sources, "roles": objects.roles,
+                             "segments": objects.segments})
+
+
+def sample_sources(now: datetime):
+    """The sources of the fictional tenant with their status: Active Directory and SAP provisioned by their
+    connector on two clusters, SAP in error with a failed aggregation, Salesforce without correlation nor
+    schedule, a badge system provisioned by service desk tickets, a legacy application by manual work items,
+    and two authoritative files, one of them with a high delete threshold."""
+    from isc_reporter.source_status import SourceData
+
+    def ago(**delta):
+        return (now - timedelta(**delta)).isoformat()
+
+    def source(name, kind, connection, features, status, cluster=None, authoritative=False, threshold=10,
+               owner="Hugo Martin", correlated=True, **extra):
+        correlation = {"type": "ACCOUNT_CORRELATION_CONFIG", "id": f"{name} correlation",
+                       "name": f"{name} correlation"}
+        return {"id": name, "name": name, "type": kind, "connectorName": kind.replace(" - Direct", ""),
+                "connectionType": connection, "features": features, "authoritative": authoritative,
+                "healthy": status == "SOURCE_STATE_HEALTHY", "status": status, "since": ago(minutes=40),
+                "deleteThreshold": threshold, "owner": {"type": "IDENTITY", "id": owner, "name": owner},
+                "accountCorrelationConfig": correlation if correlated else None,
+                "cluster": {"type": "CLUSTER", "id": cluster, "name": cluster} if cluster else None,
+                "created": "2024-03-04T09:00:00Z", "modified": ago(days=20), **extra}
+
+    def task(status, **delta):
+        refused = {"locale": "en-US", "message": "Connection refused: sap-prd.example.com:3300"}
+        messages = [{"type": "ERROR", "key": "err", "localizedText": refused}] if status == "ERROR" else []
+        return {"completionStatus": status, "created": ago(**delta), "completed": ago(**delta),
+                "messages": messages}
+
+    def policy(usage, *fields):
+        return {"name": f"{usage.title()} account", "usageType": usage,
+                "fields": [{"name": f} for f in fields]}
+
+    def details(accounts, uncorrelated, aggregation, schedules=(), policies=(), assignments=(), sync=None):
+        pairs = [{"property": p, "value": v, "operation": "EQ"} for p, v in assignments]
+        timed = [{"type": t, "cronExpression": c} for t, c in schedules]
+        return {"policies": list(policies), "schedules": timed,
+                "correlation": {"attributeAssignments": pairs} if pairs else {}, "accounts": accounts,
+                "uncorrelated": uncorrelated, "aggregation": aggregation, "sync": sync}
+
+    direct = ["PROVISIONING", "SYNC_PROVISIONING", "ENABLE", "UNLOCK", "PASSWORD", "AUTHENTICATE",
+              "DIRECT_PERMISSIONS", "GROUP_PROVISIONING", "MANAGER_LOOKUP", "SEARCH"]
+    synced = [{"name": n, "displayName": d, "enabled": e, "target": t} for n, d, e, t in (
+        ("email", "Email", True, "mail"), ("department", "Department", True, "department"),
+        ("title", "Title", True, "title"), ("manager", "Manager", False, "manager"),
+        ("phone", "Phone", False, "telephoneNumber"),
+        ("location", "Location", False, "physicalDeliveryOfficeName"))]
+    healthy, file = "SOURCE_STATE_HEALTHY", "Delimited File"
+    sources = [
+        source("Active Directory", "Active Directory - Direct", "direct", direct, healthy, "Paris cluster",
+               beforeProvisioningRule={"type": "RULE", "id": "ad-bp", "name": "AD Before Provisioning"}),
+        source("SAP", "SAP - Direct", "direct", ["PROVISIONING", "ENABLE", "PASSWORD", "UNLOCK"],
+               "SOURCE_STATE_ERROR_SOURCE", "Lyon cluster", owner="Grace Rossi"),
+        source("Salesforce", "Salesforce", "direct", ["PROVISIONING", "ENABLE", "ACCOUNT_ONLY_REQUEST"],
+               healthy, correlated=False, owner="Omar Haddad"),
+        source("Badge System", file, "file", ["NO_RANDOM_ACCESS", "DISCOVER_SCHEMA"], healthy,
+               owner="Ines Silva"),
+        source("Legacy Finance", file, "file", ["NO_RANDOM_ACCESS"], "SOURCE_STATE_UNCHECKED_SOURCE",
+               owner="Paula Nowak"),
+        source("HR System", file, "file", ["NO_RANDOM_ACCESS"], healthy, authoritative=True, threshold=100,
+               managerCorrelationMapping={"accountAttributeName": "managerId",
+                                          "identityAttributeName": "uid"}),
+        source("Contractor Register", file, "file", ["NO_RANDOM_ACCESS"], healthy, authoritative=True),
+    ]
+    ad_policies = [policy("CREATE", "distinguishedName", "sAMAccountName", "mail", "password"),
+                   policy("UPDATE", "department", "title"), policy("DISABLE", "description")]
+    ad_schedules = [("ACCOUNT_AGGREGATION", "0 0 * * * ?"), ("GROUP_AGGREGATION", "0 0 1 * * ?")]
+    data = {
+        "Active Directory": details(1820, 37, task("SUCCESS", hours=2), ad_schedules, ad_policies,
+                                    [("employeeNumber", "employeeID")], synced),
+        "SAP": details(640, 12, task("ERROR", days=3), [("ACCOUNT_AGGREGATION", "0 0 2 * * ?")],
+                       [policy("CREATE", "USERNAME", "EMAIL")], [("employeeNumber", "PERNR")], []),
+        "Salesforce": details(310, 64, task("SUCCESS", days=12), [], [policy("UPDATE", "Title")], sync=[]),
+        "Badge System": details(420, 3, task("SUCCESS", days=1), [], [], [("employeeNumber", "badgeOwner")]),
+        "Legacy Finance": details(95, 0, task("WARNING", days=40), [], [], [("email", "userMail")]),
+        "HR System": details(2034, 0, task("SUCCESS", hours=7), [], [], [("employeeNumber", "employeeId")]),
+        "Contractor Register": details(312, 0, task("SUCCESS", hours=7), [], [], [("employeeNumber", "id")]),
+    }
+    clusters = {
+        "Paris cluster": {"id": "Paris cluster", "name": "Paris cluster", "clientType": "CCG",
+                          "status": "NORMAL", "clientIds": ["va-paris-1", "va-paris-2"],
+                          "currentInstalledReleaseVersion": "2026.10.1"},
+        "Lyon cluster": {"id": "Lyon cluster", "name": "Lyon cluster", "clientType": "CCG",
+                         "status": "WARNING", "clientIds": ["va-lyon-1"],
+                         "currentInstalledReleaseVersion": "2026.08.3",
+                         "updatePackage": "2026.10.1"},
+    }
+    return SourceData(sources, data, clusters, {"Badge System": "ServiceNow"}, now=now, origin="demo")
+
+
+def sample_transform_analysis() -> tuple[list[dict], dict[str, dict], list[dict]]:
+    """The demo profiles, transforms and policies, with what a tenant collects over the years:
+    duplicates, a transform that only calls another one, a lookup without default, nested and
+    unreachable choices, double case changes, a block repeated in two places, a loop, a transform
+    reading one source used by two profiles, a transform repeating another one for a given input, a
+    value recomputed every night for nothing."""
+    profiles, transforms = sample_profiles()
+    policies = sample_policies()
+
+    def account(attribute, source="HR System"):
+        return {"type": "accountAttribute", "attributes": {"sourceName": source, "attributeName": attribute}}
+
+    def reference(name, given=None):
+        return {"type": "reference", "attributes": {"id": name, **({"input": given} if given else {})}}
+
+    def lower(given):
+        return {"type": "lower", "attributes": {"input": given}}
+
+    def mapping(name, definition):
+        return {"identityAttributeName": name, "transformDefinition": definition}
+
+    def named(name, kind, **attributes):
+        return {"name": name, "type": kind, "attributes": attributes}
+
+    nickname = {"type": "concat", "attributes": {"values": [lower(account("givenName")), ".",
+                                                             lower(account("surname"))]}}
+    for transform in (
+            named("Lowercase", "lower"), named("To lower case", "lower"),
+            named("Lowercase email", "lower", input=account("mail", "Active Directory")),
+            named("Lower (old name)", "reference", id="Lowercase"),
+            named("Country name", "lookup", table={"FR": "France", "DE": "Germany", "IT": "Italy"}),
+            named("HR department", "upper", input=account("department")),
+            named("Hire date", "dateFormat", inputFormat="yyyy-MM-dd", outputFormat="yyyy-MM-dd",
+                  input=account("hireDate")),
+            named("Loop A", "upper", input=reference("Loop B")),
+            named("Loop B", "lower", input=reference("Loop A"))):
+        transforms[transform["name"]] = transform
+    phone = {"type": "firstValid", "attributes": {"values": [
+        {"type": "firstValid", "attributes": {"values": [account("mobile"), account("phone")]}},
+        "none", account("telephoneNumber", "Active Directory")]}}
+    employees, contractors = profiles
+    employees["identityAttributeConfig"]["attributeTransforms"] += [
+        mapping("country", reference("Country name", account("country"))),
+        mapping("phone", phone),
+        mapping("login", lower(lower(account("sAMAccountName", "Active Directory")))),
+        mapping("alias", nickname),
+        mapping("costCenter", reference("HR department")),
+        mapping("hireDate", reference("Hire date")),
+        mapping("category", {"type": "static", "attributes": {
+            "value": "#if($department == 'IT')Technical#{else}Business#end"}}),
+        mapping("workEmail", reference("Lowercase email")),
+        mapping("jobTitle", {"type": "upper", "attributes": {"input": account("jobTitle"),
+                                                             "requiresPeriodicRefresh": True}}),
+    ]
+    contractors["identityAttributeConfig"]["attributeTransforms"] += [
+        mapping("costCenter", reference("HR department")),
+        mapping("login", reference("To lower case", account("login", "Contractor Register"))),
+    ]
+    policies[0]["fields"] += [
+        {"name": "mailNickname", "transform": copy.deepcopy(nickname)},
+        {"name": "company", "transform": reference("Lower (old name)", account("company"))}]
+    return profiles, transforms, policies
 
 
 def sample_criteria():
@@ -485,8 +707,11 @@ def run(folder: str) -> list[str]:
         report_writers,
         reporting,
         role_impact,
+        snapshot,
         source_migration,
+        source_status,
         sync_impact,
+        transform_analysis,
     )
     from isc_reporter.source_migration import Source
 
@@ -524,7 +749,8 @@ def run(folder: str) -> list[str]:
     for extension, writer in (("xlsx", identity_profiles.write_xlsx), ("pdf", identity_profiles.write_pdf),
                               ("html", mappings_html.write_html)):
         path = os.path.join(folder, f"mappings.{extension}")
-        writer(path, profiles, transforms, origin="demo", policies=sample_policies())
+        writer(path, profiles, transforms, origin="demo", policies=sample_policies(),
+               states=sample_lifecycle())
         out.append(path)
     plan = source_migration.analyse(
         profiles,
@@ -548,8 +774,16 @@ def run(folder: str) -> list[str]:
     base = os.path.join(folder, "leavers")
     out += [leavers.write_xlsx(base + ".xlsx", residual), leavers.write_pdf(base + ".pdf", residual),
             leavers.write_csv(base + ".csv", residual)]
+    analysis = transform_analysis.analyse(*sample_transform_analysis(), origin="demo")
+    out += transform_analysis.write_outputs(analysis, os.path.join(folder, "transform-analysis"))
     impact = role_impact.analyse(sample_role_impact(random.Random(17), people))
     base = os.path.join(folder, "role-impact")
     out += [role_impact.write_xlsx(base + ".xlsx", impact), role_impact.write_pdf(base + ".pdf", impact),
             role_impact.write_csv(base + ".csv", impact)]
+    status = source_status.analyse(sample_sources(now))
+    base = os.path.join(folder, "sources")
+    out += [source_status.write_xlsx(base + ".xlsx", status), source_status.write_pdf(base + ".pdf", status),
+            source_status.write_csv(base + ".csv", status)]
+    taken = snapshot.write(sample_snapshot(), os.path.join(folder, "snapshot"), now=now)
+    out.append(os.path.join(taken.folder, snapshot.MANIFEST))
     return out

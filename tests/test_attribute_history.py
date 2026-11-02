@@ -1,12 +1,11 @@
 """Identity attribute change history (old and new values)."""
 
-import json
 import zipfile
 from datetime import datetime, timezone
 
 import pytest
 
-from conftest import FakeApi, FakeIsc
+from conftest import FakeApi, FakeIsc, Raw
 from isc_reporter import attribute_history as ah
 from isc_reporter import cli
 from isc_reporter.errors import UsageError
@@ -118,14 +117,6 @@ def test_outputs(data, tmp_path):
     ah.write_pdf(empty, str(tmp_path / "e.pdf"), "Empty")
 
 
-class Raw:
-    """What a ``..._without_preload_content`` call returns."""
-
-    def __init__(self, payload, status=200):
-        self.status, self.headers = status, {}
-        self.data = json.dumps(payload).encode()
-
-
 def tenant(history_status=200):
     def search_post_v1(search, limit):
         query = search.query.query
@@ -156,7 +147,7 @@ def test_missing_permission_is_explained():
 
 
 def test_cli(tmp_path, monkeypatch):
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: tenant())
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: tenant())
     out = tmp_path / "report"
     assert cli.main(["changes", "--attributes", "department,manager", "--days", "3650",
                      "--format", "xlsx", "pdf", "csv", "-o", str(out), "--log-dir", ""]) == 0

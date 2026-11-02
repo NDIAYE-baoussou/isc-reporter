@@ -397,7 +397,7 @@ def test_cli_against_tenant(tmp_path, monkeypatch):
         dimensions=FakeApi(list_dimensions_v1=lambda role_id, limit, offset:
                            [Dimension.from_dict({**LEAVERS, "owner": OWNER})] if not offset else []),
         segments=FakeApi(list_segments_v1=first_page([Segment.from_dict(SEGMENTS[0])])))
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: isc)
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: isc)
     out = tmp_path / "out"
     assert cli.main(["migration", "--old-source", "HR", "--new-source", "Workday", "--no-pdf",
                      "-o", str(out), "--log-dir", ""]) == 0

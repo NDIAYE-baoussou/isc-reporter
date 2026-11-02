@@ -20,16 +20,18 @@ change would do before you make it. It only reads from the tenant.
 
 - **See what ISC holds.** Identities with their roles, access profiles, entitlements and accounts
   on one line each, certification progress and reviewer workload, attribute changes with their old
-  and new values. *For IAM operations, managers and auditors.*
+  and new values, the status of every source and how ISC provisions it. *For IAM operations,
+  managers and auditors.*
 - **Understand the configuration.** How every identity attribute is computed, in plain words,
   where else it is used (transforms, provisioning policies), how the named transforms depend on
-  each other, and checks for likely mistakes. *For ISC engineers and architects.*
+  each other, what is broken, risky or repeated in the transforms with optimized drafts, and checks
+  for likely mistakes. *For ISC engineers and architects.*
 - **Change safely.** Before replacing a source, enabling attribute synchronization or enabling a
   role, see what would be impacted, updated or provisioned, with draft JSON to review. *For
   implementation teams and consultants.*
 - **Keep audit evidence.** Every certification decision with its reviewer comment, attribute
-  change history, and the query behind each report, in files you can archive. *For audit and
-  compliance.*
+  change history, the query behind each report, and snapshots of the configuration whose history
+  shows what changed and when, in files you can archive. *For audit and compliance.*
 
 ## Commands
 
@@ -38,12 +40,16 @@ change would do before you make it. It only reads from the tenant.
 | `search` | Any search (identities, access profiles, roles, entitlements, events, account activities, workflows) with **one line per object**: an identity's roles, access profiles, entitlements and accounts are consolidated instead of repeated on many lines. | xlsx, pdf, csv | Beta |
 | `campaigns` | Certification campaign dashboard: progress, approved / revoked / pending decisions by access type, reviewer workload, overdue certifications, and every reviewed item for audit evidence. | xlsx, pdf | Beta |
 | `changes` | Identity attribute changes **with old and new values** over a period (e.g. department and manager changes of the last 30 days), which ISC search cannot show. | xlsx, pdf, csv | Beta |
-| `mappings` | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, where else the attribute is used, and checks for likely mistakes; how the named transforms depend on each other, as trees and as an interactive map. | xlsx, pdf, interactive html | Beta |
+| `sources` | Status and capabilities of every source: health and virtual appliance cluster, **how ISC provisions it** (its connector, a service desk integration or manual work items), features (provisioning, enable / disable, passwords, unlock...), provisioning policies, account correlation, attribute synchronization, aggregation schedule and last aggregation, accounts and uncorrelated accounts, with checks. | xlsx, pdf, csv | Experimental |
+| `mappings` | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, where else the attribute is used, and checks for likely mistakes; how the named transforms depend on each other, as trees and as an interactive map; what each lifecycle state provisions, source by source. | xlsx, pdf, interactive html | Beta |
+| `transforms` | Transform analysis: what is broken (missing or looping transforms), risky (lookup without default, identity attributes read in profile mappings), repeated (duplicates, same logic for other inputs, copies, blocks in several places), unused, too complex or recomputed every night for nothing, following SailPoint's transform guidance, with **optimized JSON drafts** of the changes that give the same result, and an **optimization plan for the whole tenant**: named transforms before and after, transform steps per identity profile. | xlsx, pdf, JSON drafts | Experimental |
 | `migration` | Impact of replacing a source (typically a new HR system) on identity profiles, transforms and attribute mappings, before / after, with draft JSON for the new objects, and the role, segment and correlation criteria that use the impacted attributes. | xlsx, pdf, csv, JSON drafts | Beta |
 | `analyze-before-sync` | Forecast of the updates ISC could send to a target system if attribute synchronization is enabled on a source: values added, changed or cleared, per attribute and per account. | xlsx, pdf, csv | Experimental |
 | `leavers` | Identities in a leaver lifecycle state that still have enabled accounts, and for each account whether the lifecycle state should have disabled it (a failure to fix) or does not cover it (a configuration gap). | xlsx, pdf, csv | Beta |
 | `role-impact` | Before enabling a role: the identities its membership criteria select, the entitlements ISC would provision to them and the accounts it would create, who would lose the role, and who already holds its access without matching. Works on a draft role with new criteria too. | xlsx, pdf, csv | Experimental |
+| `snapshot` | Configuration snapshot: transforms, identity profiles with their lifecycle states, identity attributes, sources with their schemas, provisioning policies and correlation, roles, access profiles, segments, connector rules, workflows, SoD policies, governance groups and password policies, **one JSON file per object**, secrets redacted. Taken again into the same folder, only what changed in the tenant changes: keep it under git for the history of the configuration. Reports run on it with `--from`. | JSON files | Experimental |
 | `demo` | Every report above, built from fictional data, without a tenant. | all of the above | |
+| `env` | Tenant environments: one per tenant (dev, sandbox, prod), switched with `env use` or `--env`; the client secret is kept in the credential store of the computer, never in a file. See [Configuration](#configuration). | | Beta |
 
 **Beta**: documented and covered by automated tests; needs validation on more real tenants.
 **Experimental**: new; its results rest on assumptions still to be confirmed on real tenants, and
@@ -70,12 +76,11 @@ You need Python 3.10 or later.
 3. **Connect to your tenant.** Create a
    [personal access token](https://documentation.sailpoint.com/saas/help/common/api_keys.html)
    with [the permissions of the commands you will use](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/docs/permissions.md),
-   then set:
+   then save it as an environment. The client secret is asked for, not shown, and kept in the
+   credential store of your computer (Windows Credential Manager, macOS Keychain), never in a file:
 
    ```bash
-   export SAIL_BASE_URL="https://<tenant>.api.identitynow.com"   # PowerShell: $env:SAIL_BASE_URL = "..."
-   export SAIL_CLIENT_ID="<client id>"
-   export SAIL_CLIENT_SECRET="<client secret>"
+   isc-reporter env add prod --url https://<tenant>.api.identitynow.com --client-id <client id>
    ```
 
 4. **Run a first report**
@@ -90,19 +95,39 @@ Python instead: `python -m iscr demo` (`py -m iscr demo` on Windows).
 
 ## Configuration
 
-Credentials are read from the first of:
+### Environments: one per tenant
 
-1. `--config path/to/file.json`;
+```bash
+isc-reporter env add sandbox --url https://acme-sb.api.identitynow.com --client-id <id>   # secret asked for
+isc-reporter env add prod --url https://acme.api.identitynow.com --client-id <id> --use
+isc-reporter env list                     # * marks the current one
+isc-reporter env use sandbox              # commands now run on the sandbox
+isc-reporter mappings --env prod          # one command on another tenant
+isc-reporter env test prod                # check that it connects
+isc-reporter env remove sandbox
+```
+
+An environment keeps the tenant URL and the client ID in `environments.json`, in your user profile
+(`%APPDATA%\isc-reporter` on Windows), and the client secret in the credential store of the
+computer: Windows Credential Manager, the macOS Keychain or the Secret Service on Linux. The secret
+is never written to a file or shown, and `env add` checks it against the tenant before saving it.
+For scripts, `--secret-stdin` reads it from standard input instead of asking for it.
+
+Credentials are taken from the first of:
+
+1. `--env NAME`, or the `ISCR_ENV` variable;
 2. the `SAIL_BASE_URL`, `SAIL_CLIENT_ID` and `SAIL_CLIENT_SECRET` environment variables
-   (`SAILPOINT_*` also work);
-3. a `config.json` in the folder you run from.
+   (`SAILPOINT_*` also work), for pipelines and computers without a credential store;
+3. the current environment (`env use`).
 
-```json
-{
-  "BaseURL": "https://<tenant>.api.identitynow.com",
-  "ClientId": "<client id>",
-  "ClientSecret": "<client secret>"
-}
+The log says which one was used (`Connected to https://... (environment 'prod')`).
+
+**From config.json.** A `config.json` holds the client secret in clear text, where it is easy to
+forget, copy or share. It is still read, with a warning, when nothing above applies (and `--config`
+still names one), but this will be removed. Move it into an environment and delete it in one go:
+
+```bash
+isc-reporter env import config.json --name prod --delete
 ```
 
 Every command writes its reports to `outputs/` (change with `--output-dir`, or name the file with
@@ -113,16 +138,19 @@ option.
 ## Safety, permissions and privacy
 
 - **Read-only.** isc-reporter only reads from your tenant: it never creates, changes or deletes
-  anything. `migration` writes draft JSON to local files for you to review, `analyze-before-sync`
-  forecasts updates without sending any, and `role-impact` evaluates a role's criteria without
-  assigning it.
-- **Offline where it can be.** `demo`, `mappings --from` and `migration --from` use fictional data
-  or exported JSON files and never connect.
+  anything. `migration` and `transforms` write draft JSON to local files for you to review,
+  `analyze-before-sync` forecasts updates without sending any, `role-impact` evaluates a role's
+  criteria without assigning it, and `snapshot` saves the configuration without restoring anything.
+- **Offline where it can be.** `demo`, `mappings --from`, `transforms --from` and `migration --from`
+  use fictional data, exported JSON files or a snapshot, and never connect.
 - **Least privilege.** [docs/permissions.md](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/docs/permissions.md)
   lists the endpoints, scopes and user levels each command needs, so the token can have no more
   than that.
-- **Credentials.** Keep them in environment variables or in a `config.json`, which `.gitignore`
-  keeps out of version control. isc-reporter does not write them to its logs or reports.
+- **Credentials.** The client secret of an environment is kept in the credential store of the
+  computer, never in a file; pipelines can use environment variables. isc-reporter never writes
+  credentials to its logs or reports, and warns when it reads a `config.json`. Snapshots replace
+  the secrets of the configuration (passwords, tokens, client secrets, encrypted connector
+  attributes) by `(redacted)`.
 - **Personal data.** Reports contain names, emails and access. `.gitignore` keeps `outputs/`,
   `logs/`, spreadsheets and PDFs out of version control; handle reports under your organisation's
   data protection rules, and never attach real reports to public issues.
@@ -194,6 +222,37 @@ shown as names. Attributes that change on most days (typically computed from tod
 transform) are flagged, as they fire an attribute change event every day. One history call is
 made per modified identity: narrow large tenants with `--query` or `--max-identities`.
 
+### Source status and capabilities
+
+```bash
+isc-reporter sources
+isc-reporter sources --source "Active Directory" --source "SAP*"
+isc-reporter sources --quick                       # the source list only: one call
+```
+
+One line per source: type and connector, direct or file connection, authoritative or not,
+**health** (its status and the date of the last health check) and the status of its virtual
+appliance cluster. **How ISC provisions it**: through its connector (the PROVISIONING feature), a
+service desk integration (tickets), manual work items for the source owner, or not at all for an
+authoritative source it only reads; whether it can enable and disable accounts, change passwords
+and unlock accounts. Then its features, provisioning policies (CREATE, UPDATE...), before
+provisioning rule, account and manager correlation, attribute synchronization, aggregation
+schedule, last account aggregation and its result, accounts and uncorrelated accounts, delete
+threshold and owner.
+
+The checks flag a source or cluster in error, a failed last aggregation, a source not aggregated
+for more than `--stale-days` days (7 by default) or without a schedule, no account correlation,
+uncorrelated accounts, a delete threshold of 50% or more (a warning on an authoritative source),
+and a source that can provision without an account create policy. Sheets: *Dashboard*, *Checks*,
+*Sources*, *Features* (one column per connector feature), *Provisioning policies* (with their
+fields), *Attribute sync* (each identity attribute, the account attribute it goes to, and whether
+it is synchronised), *Clusters* and *Settings*. The CSV holds the *Sources* sheet.
+
+The details of each source take about seven calls per source; `--quick` reads only the source
+list. What the token may not read is listed in *Settings*, and the rest of the report is still
+produced. The connection settings of the sources, where their credentials are kept, are left out
+of the report.
+
 ### Identity attribute mappings
 
 ![Identity attribute mappings](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/profiles.png)
@@ -244,6 +303,16 @@ email                              identity attribute (Employees, inline transfo
 The *Transforms* sheet lists every named transform, used or not, with the transforms it calls,
 those that call it, what it depends on and its definition.
 
+**What each lifecycle state provisions.** The *Lifecycle states* sheet lists the lifecycle states of
+each profile and what happens when an identity enters one: the accounts enabled, disabled or deleted
+and on which sources (all sources, with exceptions, or a list), the access profiles granted, whether
+all access is removed, who is notified, and how many identities are in it. *Lifecycle by source*
+turns it around: one line per source, one column per state, with Enable, Disable or Delete. The
+*Checks* sheet adds what is likely wrong: a value the `cloudLifecycleState` mapping can return that
+is not a state of the profile or is disabled, a leaver state (inactive) that removes nothing, a
+disabled state that still holds identities, and sources or access profiles that no longer exist.
+With `--from`, the states a profile export lists (`lifecycleStates`) are used.
+
 `mappings.html` shows the same as an interactive map, in any browser and without internet access:
 every named transform and the identity attributes that link them, each one after what it depends
 on. Click a transform (or find it with the search) to light up everything it depends on and
@@ -252,6 +321,64 @@ calls, what calls it, the attributes it reads and uses it, and its definition. F
 steps* and the *Attribute details* tab draw how one transform or one identity attribute computes
 its value, step by step down to the account attributes. Zoom, move, and save any diagram as an SVG
 image for a design document. `--format` chooses the files (`xlsx pdf html` by default).
+
+### Transform analysis and optimized drafts
+
+```bash
+isc-reporter transforms
+isc-reporter transforms --from exports/                # offline, from exported JSON
+isc-reporter transforms --no-drafts --format xlsx      # the report only
+```
+
+Analyses every place a transform is defined: the named transforms, the identity profile mappings
+and the fields of the provisioning policies, following
+[SailPoint's guidance on transforms](https://developer.sailpoint.com/docs/extensibility/transforms/).
+Each finding has a severity, the place (down to the step inside the transform), why it matters and
+what to do:
+
+- **Broken**: a reference to a transform that does not exist or names none, transforms calling each
+  other in a loop.
+- **Risky**: a lookup without `default` (SailPoint returns an error for any other value), an identity
+  attribute read within an identity profile mapping (SailPoint advises against it: attributes are
+  computed in parallel), a named transform that reads one source but is used by profiles of other
+  sources, a comparison with `now` that is not refreshed nightly (to verify), a transform close to
+  the 400 KB limit.
+- **Bad data**: a `firstValid` that reads data with no fixed value to fall back on.
+- **Performance**: `requiresPeriodicRefresh` set on a value that does not change on its own (no
+  comparison with today's date, no other identity, no rule): the nightly identity refresh computes
+  it again for every identity of the profile, for nothing.
+- **Simplify**: duplicate named transforms, transforms that only call another one, transforms that
+  apply the same logic to different inputs, inline copies of a named transform, blocks repeated in
+  several places, nested `firstValid` or `concat`, choices that are never reached, double case
+  changes, a `dateFormat` to the same format.
+- **Maintenance**: transforms not used anywhere, complex transforms, rules, logic in Velocity
+  templates.
+
+The `optimized` folder holds the transforms, identity profiles and provisioning policies rewritten
+with the *Simplify* changes, which give the same result: duplicates and aliases replaced by the
+transform they repeat, repeated blocks moved to new `Shared ...` named transforms, nesting
+flattened, needless steps removed. `changes.csv` lists every change with the logic before and
+after, `delete.csv` the transforms no longer called once the drafts are applied. Nothing is sent to
+the tenant: review the drafts, create the shared transforms first, then update the others, and check
+a few identities with the identity profile preview. SailPoint's own transforms (`internal`) and
+rules are never changed, and fixes that would change a result (adding a default, a fallback) are
+only recommended. Forms and workflows are not read: check them before deleting a transform reported
+as not used.
+
+**Optimizing the whole tenant.** The *Optimization plan* sheet, first in the workbook and the PDF,
+puts the suggestions in the order to apply them, each with its effect: fix the warnings, delete the
+transforms not used, replace the duplicates and aliases, keep one transform per logic, share the
+repeated blocks, apply the simplifications, remove the needless nightly refreshes, replace the rules
+of the identity profiles. It ends with the number of custom named transforms now and after the plan
+(*16 now, 11 after these steps* in the demo). Named transforms that differ only by the attribute they read
+(`lower` of the AD `mail`, `lower` of the AD `login`...) are listed in *Same logic*: one transform
+without `input` serves them all, each identity profile mapping giving its source attribute, or each
+reference its `input`. *Cost by profile* counts the transform steps each identity profile runs for
+one identity, the named transforms called included, now and with the drafts, and for all its
+identities, with the attributes refreshed every night, the rules and the reads of other identities.
+These counts are an estimate to compare profiles and measure the drafts, not a measured time; a
+configuration snapshot holds no identity counts, so `--from` on a snapshot gives the steps per
+identity only. *Complexity* shows where each named transform is used and for how many identities.
 
 ### Source migration analysis
 
@@ -287,6 +414,8 @@ isc-reporter analyze-before-sync "Active Directory"
 isc-reporter analyze-before-sync "Active Directory" --map location=physicalDeliveryOfficeName
 isc-reporter analyze-before-sync "Active Directory" --map-file extra-mapping.csv --only-map
 isc-reporter analyze-before-sync "Active Directory" --format xlsx pdf csv --threshold 5
+isc-reporter analyze-before-sync "Active Directory" --exclude title,department --exclude "extensionAttribute*"
+isc-reporter analyze-before-sync "Active Directory" --exclude-file never-synced.txt
 ```
 
 (`analyzebeforesync` also works.) Enabling attribute synchronization on a source can send a bulk of
@@ -301,9 +430,18 @@ policy usage types than `CREATE`. A verdict (*No update expected*, *Limited upda
 expected*) is given, a bulk update being flagged when a value would be cleared or when `--threshold`
 percent of the accounts (default 10) would be updated.
 
+Attributes that will never be synchronised (switched off in the source's attribute sync settings, or
+owned by the target system) can be left out with `--exclude` (repeatable, comma-separated) or
+`--exclude-file` (one per line, `#` for comments, handy for a list kept with your project). Give an
+account or identity attribute name, with `*` and `?` as wildcards, or an `IDENTITY=ACCOUNT` pair to
+leave out one mapping only; case is ignored. Excluded attributes are neither compared nor counted in
+the verdict; they are listed in the *Excluded* sheet and in the checks, and a name that matches
+nothing is reported, in case of a typo.
+
 Sheets: *Dashboard*, *Attributes* (per mapped attribute: accounts compared, added, changed, cleared,
 share, risk), *Accounts* (worst first), *Changes* (current and new value of every update; the CSV has
-them all), *Not analysed* (policy fields that are not a direct copy), *Checks*. Every difference is
+them all), *Not analysed* (policy fields that are not a direct copy), *Excluded* (with `--exclude`),
+*Checks*. Every difference is
 counted, as if ISC evaluated all accounts, so read the figures as an upper bound. The *Changes*
 sheet contains real attribute values: protect the file.
 
@@ -357,6 +495,49 @@ The criteria are evaluated by the command, as ISC is expected to: values compare
 multi-valued attribute matching when one of its values does. On a role already assigned by its
 criteria, few *Loses the role* and *Gets the role* lines confirm that the evaluation matches the
 tenant. The criteria of dimensions are not analysed.
+
+### Configuration snapshot
+
+```bash
+isc-reporter snapshot -o config-history/prod                         # every type
+isc-reporter snapshot -o config-history/prod --only transforms identity-profiles
+isc-reporter mappings --from config-history/prod                     # a report from it, offline
+```
+
+Saves the configuration of the tenant as JSON, one file per object and one folder per type:
+`transforms`, `identity-profiles` (with their lifecycle states), `identity-attributes`, `sources`
+(with their schemas, provisioning policies and account correlation), `roles` (with the dimensions of
+dynamic roles), `access-profiles`, `segments`, `connector-rules`, `workflows`, `sod-policies`,
+`governance-groups` and `password-policies`. `snapshot.json` says from which tenant and endpoint each
+type was read, when, and what changed since the previous snapshot.
+
+Taken again into the same folder, a snapshot rewrites only the files of the objects that changed,
+adds the new ones and removes those deleted in the tenant. Keep the folder under git and its history
+is the history of the configuration: `git diff` shows what changed between two snapshots, `git log
+-- transforms/` when each transform changed.
+
+```bash
+git init config-history/prod                                         # once
+isc-reporter snapshot --env prod -o config-history/prod
+git -C config-history/prod add -A && git -C config-history/prod commit -m "Snapshot"
+```
+
+So that the files only change when the configuration does, keys and lists of references are kept in
+a fixed order, and the fields that change on their own are left out: modification dates, identity,
+member and execution counts, the refresh flag of identity profiles, source health and aggregation
+state. Reports run from a snapshot therefore show no identity counts.
+
+Secrets are replaced by `(redacted)`: passwords, tokens, client secrets and API keys of the sources
+and workflows, the connector attributes listed as encrypted, and the static values of password
+fields in provisioning policies. Look through the files once before sharing the folder: a secret
+kept under an unusual name, in a description for example, cannot be recognised. A snapshot is for
+history and comparison, not for restoring: nothing is sent back to the tenant.
+
+The folder must be new, empty (a new git repository is fine) or hold an earlier snapshot of the same
+tenant, so that another folder or the snapshot of another tenant is never overwritten. A type that
+cannot be read (a scope missing from the token) is reported, and its files from the earlier snapshot
+are kept. Cloud rules (their code is not available from the API), forms and notification templates
+are not included.
 
 ## Roadmap and contributing
 

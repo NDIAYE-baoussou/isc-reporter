@@ -142,7 +142,7 @@ def fake_isc(lifecycle=LIFECYCLE):
 
 def test_cli(tmp_path, monkeypatch):
     isc = fake_isc()
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: isc)
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: isc)
     out = tmp_path / "leavers"
     assert cli.main(["leavers", "--date-attribute", "endDate", "--grace", "2", "--format", "xlsx", "csv",
                      "-o", str(out), "--log-dir", ""]) == 0
@@ -156,7 +156,7 @@ def test_cli(tmp_path, monkeypatch):
 
 def test_cli_needs_states_or_a_date_for_grace(tmp_path, monkeypatch):
     monkeypatch.setattr("isc_reporter.client.connect",
-                        lambda config=None: fake_isc({"p1": {"active": state("active", "ACTIVE")}}))
+                        lambda *args, **kwargs: fake_isc({"p1": {"active": state("active", "ACTIVE")}}))
     base = ["leavers", "--format", "csv", "-o", str(tmp_path / "x"), "--log-dir", ""]
     assert cli.main(base) == 2                                    # no inactive state configured
     assert cli.main([*base, "--grace", "3"]) == 2                 # grace without a departure date

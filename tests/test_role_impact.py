@@ -212,7 +212,7 @@ def test_fetch_reads_access_assignments_and_accounts_of_account_criteria():
 
 
 def test_cli(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: fake_isc())
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: fake_isc())
     out = tmp_path / "impact"
     args = ["role-impact", "Finance", "--format", "xlsx", "csv", "-o", str(out), "--log-dir", ""]
     assert cli.main(args) == 0
@@ -224,7 +224,7 @@ def test_cli(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_with_a_draft_role(tmp_path, monkeypatch):
-    monkeypatch.setattr("isc_reporter.client.connect", lambda config=None: fake_isc())
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: fake_isc())
     draft = {**ROLE, "membership": {"type": "STANDARD",
                                     "criteria": leaf("IDENTITY", "department", "EQUALS", "Sales")}}
     (tmp_path / "draft.json").write_text(json.dumps(draft), encoding="utf-8")

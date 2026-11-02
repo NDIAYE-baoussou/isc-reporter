@@ -22,8 +22,8 @@ USAGE_CHOICES = ("CREATE", "UPDATE", "ENABLE", "DISABLE")
 def _connect(args):
     from isc_reporter.client import connect
 
-    isc = connect(args.config)
-    log.info("Connected to %s", isc.base_url)
+    isc = connect(args.config, args.env)
+    log.info("Connected to %s%s", isc.base_url, f" ({isc.origin})" if getattr(isc, "origin", "") else "")
     return isc
 
 
@@ -146,11 +146,44 @@ def _changes(args) -> int:
     return 0
 
 
+# -- sources --------------------------------------------------------------------------------
+
+
+def _sources(args) -> int:
+    from isc_reporter import source_status
+
+    isc = _connect(args)
+    data = source_status.fetch(isc, args.source, args.quick, args.stale_days)
+    for pattern in data.unmatched:
+        log.warning("--source %s matches no source", pattern)
+    if not data.sources:
+        raise UsageError("no source to report on" + (" matches --source" if args.source else ""))
+    for note in data.notes:
+        log.warning("%s", note)
+    result = source_status.analyse(data)
+    base = _base(args, "sources")
+    for fmt in dict.fromkeys(args.format):
+        path = base + "." + fmt
+        if fmt == "xlsx":
+            source_status.write_xlsx(path, result, args.title or "")
+        elif fmt == "pdf":
+            source_status.write_pdf(path, result, args.title or "", args.pdf_max_rows)
+        else:
+            source_status.write_csv(path, result)
+        log.info("%s: %s", fmt.upper(), path)
+    health = {state: sum(row["Health"] == state for row in result.sources)
+              for state in (source_status.HEALTHY, source_status.ERROR)}
+    log.info("%d source(s): %d healthy, %d in error, %d provisioned by their connector; %d warning(s)",
+             len(result.sources), health[source_status.HEALTHY], health[source_status.ERROR],
+             sum(row["Provisioning"] == source_status.CONNECTOR for row in result.sources), result.warnings)
+    return 0
+
+
 # -- identity profiles ---------------------------------------------------------------------
 
 
 def _mappings(args) -> int:
-    from isc_reporter import identity_profiles, mappings_html
+    from isc_reporter import identity_profiles, lifecycle, mappings_html
 
     if args.command != "mappings":
         log.warning("The '%s' command is now called 'mappings'; the old name will be removed in a future "
@@ -158,8 +191,8 @@ def _mappings(args) -> int:
     if args.source:
         profiles, transforms = identity_profiles.load_files(args.source)
         policies = identity_profiles.load_policies(args.source)
-        names: dict[str, str] = {}
-        origin = ", ".join(os.path.basename(os.path.normpath(path)) for path in args.source)
+        names = identity_profiles.load_names(args.source)
+        origin =", ".join(os.path.basename(os.path.normpath(path)) for path in args.source)
         log.info("Read %d profile(s) and %d transform(s) from files", len(profiles), len(transforms))
     else:
         isc = _connect(args)
@@ -176,14 +209,40 @@ def _mappings(args) -> int:
             raise UsageError(f"identity profile(s) not found: {', '.join(sorted(missing))}")
     if not profiles:
         raise UsageError("no identity profile to document")
+    states = lifecycle.from_files(profiles, args.source) if args.source else lifecycle.fetch(isc, profiles)
+    for note in states.notes:
+        log.warning("%s", note)
+    log.info("%d lifecycle state(s) read", sum(len(found) for found in states.states.values()))
     base = _base(args, "mappings")
     writers = {"xlsx": ("Excel", identity_profiles.write_xlsx), "pdf": ("PDF", identity_profiles.write_pdf),
                "html": ("Diagrams", mappings_html.write_html)}
     for fmt in dict.fromkeys(args.format):
         label, writer = writers[fmt]
-        writer(base + "." + fmt, profiles, transforms, names, origin, policies)
+        writer(base + "." + fmt, profiles, transforms, names, origin, policies, states=states)
         log.info("%s: %s (%d profile(s))", label, base + "." + fmt,
                  len(profiles))
+    return 0
+
+
+def _transforms(args) -> int:
+    from isc_reporter import transform_analysis as analysis
+
+    if args.source:
+        profiles, transforms, policies = analysis.load_files(args.source)
+        origin = ", ".join(os.path.basename(os.path.normpath(path)) for path in args.source)
+    else:
+        isc = _connect(args)
+        profiles, transforms, policies = analysis.fetch(isc)
+        origin = isc.base_url
+    log.info("Read %d named transform(s), %d identity profile(s) and %d provisioning polic(ies)",
+             len(transforms), len(profiles), len(policies))
+    result = analysis.analyse(profiles, transforms, policies, origin)
+    folder = args.output or output_path(args.output_dir, "transform-analysis", "")
+    analysis.write_outputs(result, folder, args.format, drafts=not args.no_drafts, title=args.title or "")
+    log.info("%d finding(s), %d warning(s); %d change(s) in the optimized drafts", len(result.findings),
+             result.warnings, len(result.changes))
+    log.info("Custom named transforms: %d now, %d after the optimization plan", *result.custom)
+    log.info("Analysis%s: %s", "" if args.no_drafts else " and optimized drafts", folder)
     return 0
 
 
@@ -203,13 +262,29 @@ def _source_with_schema(isc, name: str):
     return Source(source.name, source.id, attributes)
 
 
+def _source_from_files(paths: list[str], name: str):
+    """The source *name* of exported files, with its account attributes when the export has its schemas
+    (a snapshot does)."""
+    from isc_reporter.identity_profiles import iter_objects
+    from isc_reporter.source_migration import Source
+
+    for obj in iter_objects(paths):
+        if obj.get("name") == name and ("connector" in obj or "connectorAttributes" in obj):
+            schemas = [schema for schema in obj.get("schemas") or []
+                       if isinstance(schema, dict) and schema.get("name") == "account"]
+            if not schemas:
+                break
+            return Source(name, obj.get("id", ""), [a["name"] for schema in schemas
+                                                    for a in schema.get("attributes") or [] if a.get("name")])
+    return Source(name)
+
+
 def _migration(args) -> int:
     from isc_reporter import criteria, identity_profiles, source_migration
-    from isc_reporter.source_migration import Source
 
     if args.source:
         profiles, transforms = identity_profiles.load_files(args.source)
-        old, new = Source(args.old_source), Source(args.new_source)
+        old, new = (_source_from_files(args.source, name) for name in (args.old_source, args.new_source))
         objects = criteria.load_files(args.source)
     else:
         isc = _connect(args)
@@ -238,6 +313,8 @@ def _sync(args) -> int:
     from isc_reporter import sync_impact
 
     explicit = sync_impact.merge(sync_impact.parse_maps(args.map), sync_impact.read_map_file(args.map_file))
+    patterns = [p for value in args.exclude or [] for p in _list(value) or []]
+    patterns += sync_impact.read_exclude_file(args.exclude_file)
     isc = _connect(args)
     source = sync_impact.find_source(isc, args.source)
     ignored: list[dict] = []
@@ -248,6 +325,15 @@ def _sync(args) -> int:
         log.info("%s: %d provisioning polic(ies), %d attribute(s) mapped directly to an identity attribute",
                  source.name, len(policies), len(found))
         mappings = sync_impact.merge(found, explicit)
+    compared = len(mappings)
+    mappings, ignored, excluded, unmatched = sync_impact.exclude(patterns, mappings, ignored)
+    if excluded:
+        log.info("Excluded, as never synchronised: %s",
+                 ", ".join(dict.fromkeys(row["Account attribute"] for row in excluded)))
+    for pattern in unmatched:
+        log.warning("--exclude %s matches no attribute of the policy or of --map", pattern)
+    if compared and not mappings:
+        raise UsageError("every attribute to compare is excluded: nothing left to forecast")
     if not mappings:
         if args.only_map:
             raise UsageError("--only-map needs at least one --map or a --map-file")
@@ -256,7 +342,8 @@ def _sync(args) -> int:
     accounts = sync_impact.fetch_accounts(isc, source.id)
     log.info("%d account(s) read from %s", len(accounts), source.name)
     identities = sync_impact.fetch_identities(isc, [a["identityId"] for a in accounts if a.get("identityId")])
-    result = sync_impact.analyse(source.name, accounts, identities, mappings, ignored, args.threshold)
+    result = sync_impact.analyse(source.name, accounts, identities, mappings, ignored, args.threshold,
+                                 excluded)
     base = _base(args, f"sync-impact_{source.name}".replace(" ", "-").replace("/", "-"))
     for fmt in dict.fromkeys(args.format):
         path = base + "." + fmt
@@ -329,6 +416,85 @@ def _role_impact(args) -> int:
     return 0
 
 
+def _snapshot(args) -> int:
+    from isc_reporter import snapshot
+
+    isc = _connect(args)
+    found = snapshot.fetch(isc, list(dict.fromkeys(args.only or snapshot.KINDS)))
+    for note in found.notes:
+        log.warning("%s", note)
+    if not found.objects:
+        raise UsageError("nothing could be read: no snapshot written")
+    folder = args.output or os.path.join(args.output_dir, "snapshot-" + snapshot.tenant_name(isc.base_url))
+    result = snapshot.write(found, folder)
+    for kind, count in result.counts.items():
+        changed = result.changed(kind)
+        detail = ", ".join(f"{changed[c]} {c}" for c in (snapshot.ADDED, snapshot.CHANGED, snapshot.REMOVED)
+                           if changed[c]) if result.since else ""
+        log.info("  %-20s %5d%s", snapshot.KINDS[kind].label, count, f"  ({detail})" if detail else "")
+    if result.since:
+        log.info("%d change(s) since the snapshot of %s", len(result.changes), result.since)
+    if result.redacted:
+        log.info("%d secret value(s) replaced by %s", result.redacted, snapshot.REDACTED)
+    log.info("Snapshot: %s", folder)
+    return 0
+
+
+def _env(args) -> int:
+    from isc_reporter import client, environments
+
+    if args.action == "list":
+        found = environments.listing()
+        if not found:
+            print("No environment yet. Add one: "
+                  "iscr env add <name> --url https://<tenant>.api.identitynow.com --client-id <client id>")
+        for env in found:
+            missing = "" if environments.has_secret(env.name) else "   (secret missing on this computer)"
+            print(f"{'*' if env.current else ' '} {env.name:<20} {env.base_url:<50} {env.client_id}{missing}")
+        return 0
+    if args.action == "use":
+        env = environments.use(args.name)
+        log.info("Current environment: %s (%s)", env.name, env.base_url)
+        return 0
+    if args.action == "remove":
+        environments.remove(args.name)
+        log.info("Environment '%s' removed, with its secret in %s", args.name, environments.store_name())
+        return 0
+    if args.action == "test":
+        name = args.name or environments.current()
+        if not name:
+            raise UsageError("no current environment: give its name, or add one with 'iscr env add'")
+        isc = client.open_session(*environments.credentials(name), origin=f"environment '{name}'")
+        log.info("Environment '%s': connected to %s", name, isc.base_url)
+        return 0
+    if args.action == "import":
+        base_url, client_id, secret = client.read_config_file(args.file)
+    else:
+        environments.check_name(args.name)
+        base_url, client_id = args.url, args.client_id
+        if args.secret_stdin:
+            secret = sys.stdin.readline().strip()
+        else:
+            import getpass
+
+            secret = getpass.getpass(f"Client secret for '{args.name}' (not shown): ").strip()
+    if not getattr(args, "no_check", False):
+        client.open_session(base_url, client_id, secret)
+        log.info("Credentials checked: an access token was obtained from %s", base_url.rstrip("/"))
+    is_current = environments.add(args.name, base_url, client_id, secret, make_current=args.use)
+    log.info("Environment '%s' saved: %s, client ID %s; the secret is in %s, not in a file", args.name,
+             base_url.rstrip("/"), client_id, environments.store_name())
+    if is_current:
+        log.info("'%s' is the current environment", args.name)
+    if args.action == "import":
+        if args.delete:
+            os.remove(args.file)
+            log.info("Deleted %s", args.file)
+        else:
+            log.warning("Delete %s now: it still holds the client secret in clear text.", args.file)
+    return 0
+
+
 def _demo(args) -> int:
     from isc_reporter import demo
 
@@ -345,8 +511,11 @@ def _demo(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     group = common.add_argument_group("common options")
-    group.add_argument("--config", help="credentials JSON (default: SAIL_* environment variables, "
-                                        "then ./config.json)")
+    group.add_argument("--env", metavar="NAME",
+                       help="tenant environment saved with 'iscr env add' (default: ISCR_ENV, the SAIL_* "
+                            "environment variables, then the current environment)")
+    group.add_argument("--config", metavar="JSON", help="credentials in a JSON file: not recommended, the "
+                                                        "secret is in clear text (see 'iscr env import')")
     group.add_argument("--output-dir", default="outputs", help="where reports go (default: outputs)")
     group.add_argument("--log-dir", default="logs", help="daily log files (default: logs; '' to disable)")
     group.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -354,11 +523,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="isc-reporter",
         description="Reports and change-impact analysis for SailPoint Identity Security Cloud: search, "
-                    "certification campaigns, identity attribute history, identity attribute mappings and "
-                    "transform dependencies, leavers who still have access, source migrations, attribute "
-                    "sync forecasts and "
-                    "role enablement impact. "
-                    "Read-only.",
+                    "certification campaigns, identity attribute history, source status and capabilities, "
+                    "identity attribute mappings and "
+                    "transform dependencies, transform analysis with optimized drafts, leavers who still "
+                    "have access, source migrations, attribute sync forecasts, role enablement impact and "
+                    "configuration snapshots. Read-only.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -420,6 +589,22 @@ def build_parser() -> argparse.ArgumentParser:
     formats(p)
     output(p)
 
+    p = command("sources", _sources, "Status and capabilities of the sources: health, cluster, how ISC "
+                                     "provisions them (connector, service desk or manual), features, "
+                                     "provisioning policies, correlation, attribute sync, aggregation "
+                                     "schedule and last aggregation, accounts, with checks.")
+    p.add_argument("--source", action="append", metavar="NAME",
+                   help="only the sources with this name, * and ? as wildcards (repeatable)")
+    p.add_argument("--quick", action="store_true",
+                   help="read the source list only (one call): no policies, schedules, correlation, "
+                        "attribute sync, last aggregation or account counts")
+    p.add_argument("--stale-days", type=int, default=7, metavar="DAYS",
+                   help="flag the sources not aggregated for more than DAYS days (default 7)")
+    p.add_argument("--title", help="report title")
+    p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
+    formats(p)
+    output(p)
+
     p = command("mappings", _mappings, "Identity attribute mappings of the identity profiles: how every "
                                        "identity attribute is built, as a tree of its transforms, where it "
                                        "is used, with checks.", aliases=["identity-profiles", "profiles"])
@@ -428,6 +613,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--profile", action="append", metavar="NAME", help="only this profile (repeatable)")
     formats(p, ("xlsx", "pdf", "html"), default=("xlsx", "pdf", "html"))
     output(p)
+
+    p = command("transforms", _transforms, "Transform analysis: what is broken, risky, repeated or more "
+                                           "complex than needed, with optimized drafts that give the same "
+                                           "result and an optimization plan for the whole tenant. Changes "
+                                           "nothing.")
+    p.add_argument("--from", dest="source", nargs="+", metavar="PATH",
+                   help="exported JSON files or folders instead of the tenant")
+    p.add_argument("--no-drafts", action="store_true", help="the report only, without the optimized drafts")
+    p.add_argument("--title", help="report title")
+    formats(p, ("xlsx", "pdf"))
+    output(p, "output folder")
 
     p = command("migration", _migration, "Impact of replacing a source by another on identity profiles, "
                                          "mappings and transforms, with draft JSON. Changes nothing.")
@@ -452,6 +648,12 @@ def build_parser() -> argparse.ArgumentParser:
                                                       "in addition")
     p.add_argument("--only-map", action="store_true", help="compare only --map/--map-file, ignore the "
                                                            "provisioning policy")
+    p.add_argument("--exclude", action="append", metavar="ATTRIBUTE",
+                   help="leave out attributes that will never be synchronised: account or identity "
+                        "attribute names, comma-separated, * and ? as wildcards, or IDENTITY=ACCOUNT pairs "
+                        "(repeatable)")
+    p.add_argument("--exclude-file", metavar="FILE", help="attributes to leave out, one per line, as for "
+                                                          "--exclude (# starts a comment)")
     p.add_argument("--usage", nargs="+", type=str.upper, choices=list(USAGE_CHOICES), default=["CREATE"],
                    help="provisioning policy usage type(s) to read (default: CREATE)")
     p.add_argument("--threshold", type=float, default=10.0, metavar="PERCENT",
@@ -497,8 +699,51 @@ def build_parser() -> argparse.ArgumentParser:
     formats(p)
     output(p)
 
+    from isc_reporter.snapshot import KINDS
+
+    p = command("snapshot", _snapshot, "Configuration snapshot: every configuration object of the tenant as "
+                                       "a JSON file, in a folder to keep under version control (git). "
+                                       "Secrets are left out. Changes nothing.")
+    p.add_argument("--only", nargs="+", choices=list(KINDS), metavar="TYPE",
+                   help=f"only these types (default: all): {', '.join(KINDS)}")
+    p.add_argument("--output", "-o", help="snapshot folder: a new or empty folder, or an earlier snapshot of "
+                                          "the same tenant to bring up to date (default: in --output-dir, "
+                                          "snapshot-<tenant>)")
+
     p = command("demo", _demo, "Write every report from fictional data, to see the output without a tenant.")
     output(p, "output folder")
+
+    env_help = ("Tenant environments: create one per tenant and switch between them. The client secret is "
+                "kept in the credential store of the computer (Windows Credential Manager, macOS "
+                "Keychain...), never in a file.")
+    p = commands.add_parser("env", help=env_help, description=env_help)
+    p.set_defaults(func=_env)
+    actions = p.add_subparsers(dest="action", required=True, metavar="ACTION")
+
+    def action(name, help_text):
+        return actions.add_parser(name, help=help_text, description=help_text, parents=[common])
+
+    a = action("add", "Create or update an environment. The client secret is asked for and not shown.")
+    a.add_argument("name", help="a short name, e.g. dev, sandbox, prod")
+    a.add_argument("--url", required=True, help="tenant API base URL, e.g. https://acme.api.identitynow.com")
+    a.add_argument("--client-id", required=True, help="client ID of the personal access token")
+    a.add_argument("--secret-stdin", action="store_true",
+                   help="read the client secret from standard input (scripts), instead of asking for it")
+    a.add_argument("--use", action="store_true", help="also make it the current environment")
+    a.add_argument("--no-check", action="store_true", help="save without checking that the tenant answers")
+    action("list", "List the environments; * marks the current one.")
+    a = action("use", "Make an environment the current one: commands run without --env use it.")
+    a.add_argument("name")
+    a = action("test", "Check that an environment connects (default: the current one).")
+    a.add_argument("name", nargs="?")
+    a = action("remove", "Remove an environment and its secret.")
+    a.add_argument("name")
+    a = action("import", "Move the credentials of a JSON file (config.json) into an environment.")
+    a.add_argument("file", help="the JSON file, e.g. config.json")
+    a.add_argument("--name", required=True, help="the environment to create")
+    a.add_argument("--use", action="store_true", help="also make it the current environment")
+    a.add_argument("--delete", action="store_true", help="delete the file once its credentials are saved")
+    a.add_argument("--no-check", action="store_true", help="save without checking that the tenant answers")
     return parser
 
 

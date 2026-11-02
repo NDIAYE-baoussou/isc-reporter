@@ -5,6 +5,7 @@ to. When it is enabled, every account whose current value differs from the value
 a candidate for an update on the target system. This module reads the provisioning policy of the
 source (the fields mapped directly to an identity attribute), the accounts of the source and the
 identities they belong to, and counts the updates ISC could send: values added, changed or cleared.
+Attributes that will never be synchronised can be excluded: they are listed, not compared.
 Nothing is changed in the tenant.
 """
 
@@ -12,8 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 
 from isc_reporter import dashboard
 from isc_reporter.api import call, list_all, model_json
@@ -80,6 +83,7 @@ class Result:
     source: str
     mappings: list[Mapping]
     ignored: list[dict]                    # policy fields that are not a direct identity attribute copy
+    excluded: list[dict] = field(default_factory=list)       # left out with --exclude
     accounts: int = 0
     uncorrelated: int = 0
     identity_missing: int = 0
@@ -200,6 +204,52 @@ def merge(*groups: list[Mapping]) -> list[Mapping]:
     return list(seen.values())
 
 
+def read_exclude_file(path: str | None) -> list[str]:
+    """One attribute or pattern per line; empty lines and lines starting with # are skipped."""
+    if not path:
+        return []
+    if not os.path.isfile(path):
+        raise UsageError(f"'{path}' does not exist")
+    with open(path, encoding="utf-8-sig") as fh:
+        return [line.strip() for line in fh if line.strip() and not line.strip().startswith("#")]
+
+
+def excludes(pattern: str, identity: str, account: str) -> bool:
+    """Whether *pattern* names this attribute: an account or identity attribute name, or an
+    ``IDENTITY=ACCOUNT`` pair, with the wildcards * and ?; case is ignored."""
+    left, separator, right = pattern.partition("=")
+    if separator:
+        return (fnmatchcase(identity.lower(), left.strip().lower())
+                and fnmatchcase(account.lower(), right.strip().lower()))
+    pattern = pattern.strip().lower()
+    return fnmatchcase(account.lower(), pattern) or (bool(identity)
+                                                     and fnmatchcase(identity.lower(), pattern))
+
+
+def exclude(patterns: list[str], mappings: list[Mapping], ignored: list[dict]
+            ) -> tuple[list[Mapping], list[dict], list[dict], list[str]]:
+    """``(mappings kept, policy fields not analysed kept, rows of what is excluded, patterns that
+    match nothing)``. Excluded attributes will never be synchronised: they are neither compared nor
+    listed as not analysed."""
+    kept, others, excluded, used = [], [], [], set()
+
+    def matching(identity: str, account: str, origin: str) -> bool:
+        found = [p for p in dict.fromkeys(patterns) if excludes(p, identity, account)]
+        if found:
+            used.update(found)
+            excluded.append({"Account attribute": account, "Identity attribute": identity, "From": origin,
+                             "Excluded by": ", ".join(found)})
+        return bool(found)
+
+    for mapping in mappings:
+        if not matching(mapping.identity_attribute, mapping.account_attribute, mapping.origin):
+            kept.append(mapping)
+    for item in ignored:
+        if not matching("", item["Field"], f"{item['Usage']} policy ({item['Transform']})"):
+            others.append(item)
+    return kept, others, excluded, [p for p in dict.fromkeys(patterns) if p not in used]
+
+
 # -- reading the tenant -------------------------------------------------------------------
 
 
@@ -279,8 +329,10 @@ def classify(current: tuple[str, ...], new: tuple[str, ...]) -> str | None:
 
 
 def analyse(source: str, accounts: list[dict], identities: dict[str, dict], mappings: list[Mapping],
-            ignored: list[dict] | None = None, threshold: float = DEFAULT_THRESHOLD) -> Result:
-    result = Result(source, mappings, ignored or [], accounts=len(accounts), threshold=threshold)
+            ignored: list[dict] | None = None, threshold: float = DEFAULT_THRESHOLD,
+            excluded: list[dict] | None = None) -> Result:
+    result = Result(source, mappings, ignored or [], excluded or [], accounts=len(accounts),
+                    threshold=threshold)
     result.stats = {m: Stats() for m in mappings}
     for account in accounts:
         identity = identities.get(account.get("identityId") or "")
@@ -367,6 +419,10 @@ def checks(result: Result) -> list[tuple[str, str, str, str]]:
     if result.ignored:
         out.append((INFO, "", "Fields not analysed", f"{len(result.ignored)} field(s) of the policy are "
                     "not a direct copy of an identity attribute (see the Not analysed sheet)."))
+    if result.excluded:
+        names = ", ".join(dict.fromkeys(row["Account attribute"] for row in result.excluded))
+        out.append((INFO, "", "Attributes excluded", f"{len(result.excluded)} attribute(s) left out with "
+                    f"--exclude, as they will never be synchronised: {names} (see the Excluded sheet)."))
     return out
 
 
@@ -390,6 +446,9 @@ READ_ME = [
                 "the share of accounts to update reaches the threshold)."),
     ("Not analysed", "Policy fields that are not a direct copy of an identity attribute, accounts without "
                      "identity, and attributes handled by rules cannot be forecast here."),
+    ("Excluded", "Attributes left out with --exclude or --exclude-file because they will never be "
+                 "synchronised: they are neither compared nor counted, and the figures do not include "
+                 "them."),
     ("Privacy", "The Changes sheet shows real attribute values (names, emails...). Protect the file."),
 ]
 
@@ -458,7 +517,8 @@ def build_dashboard(result: Result, origin: str = "", title: str = "",
             ("Accounts analysed", str(result.analysed), dashboard.BLUE),
             ("Accounts to update", f"{result.impacted}  ({result.share:.1f}%)", verdict_colour),
             ("Attribute updates", str(total), verdict_colour),
-            ("Attributes synchronised", str(len(result.mappings)), dashboard.BLUE),
+            ("Attributes synchronised", str(len(result.mappings)) + (
+                f"  ({len(result.excluded)} excluded)" if result.excluded else ""), dashboard.BLUE),
             ("Left out", f"{result.uncorrelated + result.identity_missing}  (no identity)", dashboard.GREY)]
     charts = []
     if result.analysed:
@@ -476,6 +536,7 @@ def build_dashboard(result: Result, origin: str = "", title: str = "",
               dashboard.Table("Changes", changes, wide=wide, fills={"Change": {
                   CLEAR: "F8CBAD", CHANGE: "FFE0B2", ADD: "DDEBF7", CASE: "EDEDED"}}),
               dashboard.Table("Not analysed", result.ignored, wide=wide),
+              *([dashboard.Table("Excluded", result.excluded, wide=wide)] if result.excluded else []),
               dashboard.Table("Checks", check_rows, wide=wide, fills={"Severity": {
                   WARNING: "F8CBAD", INFO: "DDEBF7"}})]
     sections = [

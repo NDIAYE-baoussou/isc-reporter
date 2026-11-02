@@ -6,14 +6,22 @@ the [issues](https://github.com/NDIAYE-baoussou/isc-reporter/issues).
 
 ## Done
 
-- **Reports**: search, certification campaigns, identity attribute changes, identity attribute
-  mappings with where each attribute is used and how the named transforms depend on each other
-  (trees and an interactive map), leavers who still have access.
+- **Reports**: search, certification campaigns, identity attribute changes, the status and
+  capabilities of the sources (health, how ISC provisions them, last aggregation), identity
+  attribute mappings with where each attribute is used and how the named transforms depend on
+  each other (trees and an interactive map), leavers who still have access.
+- **Configuration checks**: transform analysis (broken, risky, repeated or needlessly complex
+  transforms) with optimized drafts that give the same result, and an optimization plan for the
+  whole tenant: fewer named transforms, fewer transform steps per identity.
+- **Configuration history**: snapshots of the configuration, one JSON file per object, secrets
+  redacted, that only change when the configuration does, to keep under git; reports run on them
+  offline.
 - **Change impact**: source migration analysis with draft JSON and the role, segment and
   correlation criteria it affects; attribute synchronization forecast; role enablement impact.
-- **Trust**: read-only by design, a demo of every command on fictional data, tests that need no
-  tenant, continuous integration, automated releases to PyPI, a security policy, and the
-  permissions of each command.
+- **Trust**: read-only by design, client secrets kept in the credential store of the computer (one
+  environment per tenant), a demo of every command on fictional data, tests that need no tenant,
+  continuous integration, automated releases to PyPI, a security policy, and the permissions of
+  each command.
 
 ## Next: findings and JSON output
 
@@ -28,14 +36,14 @@ the [issues](https://github.com/NDIAYE-baoussou/isc-reporter/issues).
 
 ## Later: a diagnostic toolkit
 
-- More configuration checks: account correlation, lifecycle states, unused or broken transforms,
-  provisioning policies.
+- More configuration checks: account correlation, lifecycle states, provisioning policies.
 - A simple way to add a check (one function, its test and its documentation), so that the
   community can contribute checks without knowing the reporting code.
 
 ## Later: operational intelligence
 
-- Compare configuration exports between environments, such as sandbox and production.
+- Compare two snapshots: two environments, such as sandbox and production, or two dates, with
+  what to copy from one to the other.
 - Compare two runs of a report to see what changed in between.
 - Migration readiness assessments.
 - Audit evidence packages: the reports with the queries used, the collection time and a manifest.

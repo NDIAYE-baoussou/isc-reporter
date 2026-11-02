@@ -1,5 +1,7 @@
-# Credentials: never commit
+# Credentials: never commit. Save them with 'isc-reporter env add' instead: the secret then goes to
+# the credential store of the computer, not to a file.
 config.json
+environments.json
 .env
 *.env
 
@@ -9,7 +11,9 @@ logs/
 *.xlsx
 *.pdf
 *.csv
+*.html
 !examples/**/*.csv
+!src/isc_reporter/templates/*.html
 
 # Python
 .venv/

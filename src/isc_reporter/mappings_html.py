@@ -78,7 +78,7 @@ def render(data: dict, title: str = "Identity attribute mappings") -> str:
 
 def write_html(path: str, profiles: list[dict], transforms: dict[str, dict] | None = None,
                display_names: dict[str, str] | None = None, origin: str = "",
-               policies: list[dict] | None = None) -> int:
+               policies: list[dict] | None = None, states=None) -> int:
     """Write the interactive page; returns the number of profiles shown."""
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(render(page_data(profiles, transforms, display_names, origin, policies)))

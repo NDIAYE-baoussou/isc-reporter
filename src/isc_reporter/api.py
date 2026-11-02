@@ -68,12 +68,38 @@ def call_json(func, **kwargs):
     return call(once)
 
 
+def count_json(func, **kwargs) -> int:
+    """The number of results of a list endpoint, from its ``X-Total-Count`` header: *func* is a
+    ``..._without_preload_content`` method, and only one result is read."""
+    def once():
+        response = func(count=True, limit=1, **kwargs)
+        if response.status >= 400:
+            raise HttpError(response.status, response.headers, response.data)
+        return int((response.headers or {}).get("X-Total-Count") or 0)
+
+    once.__name__ = getattr(func, "__name__", "API")
+    return call(once)
+
+
 def list_all(func, *, page_size: int = 250, **kwargs) -> list:
     """Collect every page of an offset-paginated list endpoint."""
     items: list = []
     offset = 0
     while True:
         page = call(func, limit=page_size, offset=offset, **kwargs) or []
+        items.extend(page)
+        if len(page) < page_size:
+            return items
+        offset += page_size
+
+
+def list_json(func, *, page_size: int = 250, **kwargs) -> list:
+    """Like :func:`list_all`, with the JSON the API returns: *func* is a ``..._without_preload_content``
+    method, every field is kept as sent and values the SDK models do not know yet do not fail."""
+    items: list = []
+    offset = 0
+    while True:
+        page = call_json(func, limit=page_size, offset=offset, **kwargs) or []
         items.extend(page)
         if len(page) < page_size:
             return items

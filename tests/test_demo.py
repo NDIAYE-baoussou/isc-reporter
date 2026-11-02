@@ -16,8 +16,11 @@ def test_demo_writes_every_report(tmp_path):
             "source-migration/attribute-mapping.csv"} <= written
     assert {"sync-impact.xlsx", "sync-impact.pdf", "sync-impact.csv"} <= written
     assert "mappings.html" in written
+    assert {"transform-analysis/transform-analysis.xlsx",
+            "transform-analysis/optimized/changes.csv"} <= written
     assert {"leavers.xlsx", "leavers.pdf", "leavers.csv"} <= written
     assert {"role-impact.xlsx", "role-impact.pdf", "role-impact.csv"} <= written
+    assert {"sources.xlsx", "sources.pdf", "sources.csv"} <= written
     for path in written:
         if path.endswith(".pdf"):
             assert (out / path).read_bytes()[:4] == b"%PDF"
