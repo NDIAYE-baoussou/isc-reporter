@@ -5,6 +5,8 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-02
+
 - `sources`: status and capabilities of every source, one line each. It shows:
   - health and the status of the virtual appliance cluster;
   - how ISC provisions the source: its connector, a service desk integration, manual work items, or
