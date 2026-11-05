@@ -1,11 +1,13 @@
-"""Impact analysis for replacing a source (typically the HR source) by a new one: identity
-profiles, their attribute mappings and transforms, and the criteria (roles, dimensions, segments,
-account and manager correlation) that use the identity attributes computed from the old source or
-read it directly.
+"""Impact analysis for replacing a source (the HR source, or any other) by a new one: identity profiles,
+their attribute mappings and transforms, the identity attributes computed from the old source, and every
+other object that depends on it (see :mod:`isc_reporter.source_usage`): roles, dimensions and segments
+by their criteria or the access they grant, access profiles, SoD policies, lifecycle states, account
+and manager correlation, provisioning policies, workflows, connector rules and password policies.
 
-It finds what depends on the old source, matches each old account attribute to one of the new
-source, shows every mapping before and after, and writes draft JSON for the new identity
-profiles and transforms. Nothing is changed in the tenant.
+It lists what depends on the old source with what to do for each object, matches each old account
+attribute to one of the new source, shows every mapping before and after, and writes draft JSON for
+the new identity profiles and transforms. The new source may not be chosen yet: the analysis then
+lists the impacts without drafts. Nothing is changed in the tenant.
 """
 
 from __future__ import annotations
@@ -17,15 +19,19 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from isc_reporter import criteria, dashboard
+from isc_reporter import criteria, dashboard, source_usage
 from isc_reporter.csvio import Column, read_rows, write_table
 from isc_reporter.identity_profiles import INFO, WARNING, _Walk
 
 TODO = "TODO_"
 NEW_SOURCE_ID = "<new source id>"
+NOT_CHOSEN = "the new source"          # its name in the actions, when it is not chosen yet
+TO_CHOOSE = "to define once the new source is chosen"
 # Profile fields that belong to the existing object and must not be copied into a new one.
 PROFILE_RUNTIME_FIELDS = ("id", "created", "modified", "identityCount", "identityRefreshRequired",
                           "hasTimeBasedAttr", "identityExceptionReportReference")
+# Read with the profile (a snapshot holds them), but created on their own: never in a profile draft.
+PROFILE_READ_ONLY = ("lifecycleStates",)
 TRANSFORM_RUNTIME_FIELDS = ("id", "internal", "created", "modified")
 
 MAPPING_SCHEMA = {
@@ -63,9 +69,12 @@ class Plan:
     checks: list[tuple] = field(default_factory=list)          # (severity, object, check, details)
     drafts: dict[str, dict] = field(default_factory=dict)       # relative path -> JSON
     impacted: dict[str, str] = field(default_factory=dict)      # identity attribute -> why it may change
-    criteria: list[dict] = field(default_factory=list)          # rows of the Criteria sheet
-    criteria_analysed: bool = False
-    criteria_notes: list[str] = field(default_factory=list)
+    criteria: list[dict] = field(default_factory=list)          # rows of the Impacts sheet
+    criteria_analysed: bool = False                             # some objects besides profiles were read
+    criteria_notes: list[str] = field(default_factory=list)     # what could not be read
+    chosen: bool = True                                         # False: the new source is not chosen yet
+    analysed: dict[str, bool] = field(default_factory=dict)     # Impacts type -> its objects were read
+    source: list[dict] = field(default_factory=list)            # rows of the Old source sheet
 
 
 # -- walking definitions --------------------------------------------------------
@@ -137,13 +146,19 @@ def read_attribute_map(path: str | None) -> dict[str, str]:
             for row in rows if row.get("old_attribute")}
 
 
-def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new: Source,
+def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new: Source | None = None,
             attribute_map: dict[str, str] | None = None, in_place: bool = False,
             suffix: str | None = None, objects: criteria.Objects | None = None) -> Plan:
-    """*objects*: roles, segments and sources whose criteria are checked (not checked if None)."""
+    """*new*: None when the new source is not chosen yet; everything that depends on the old source is
+    then listed, without drafts. *objects*: the other objects that may depend on the old source (roles,
+    access profiles, SoD policies...), not checked if None."""
     attribute_map = {old_name.lower(): new_name for old_name, new_name in (attribute_map or {}).items()}
-    plan = Plan(old, new, in_place, suffix if suffix is not None else f" - {new.name}")
-    if old.name.lower() == new.name.lower():
+    chosen = new is not None
+    new = new or Source(NOT_CHOSEN)
+    plan = Plan(old, new, in_place, suffix if suffix is not None else f" - {new.name}", chosen=chosen)
+    if objects is not None and not old.id:
+        old.id = (source_usage.find_source(objects, old) or {}).get("id", "")
+    if chosen and old.name.lower() == new.name.lower():
         plan.checks.append((WARNING, "", "Same source", "The old and new source are the same."))
 
     # Transforms: direct readers of the old source, then whatever calls them, level by level.
@@ -200,6 +215,12 @@ def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new:
     if objects is not None:
         for attribute, where in criteria.old_source_attributes(objects, old):
             _use(plan, attribute, where)
+        for read in source_usage.policy_reads(objects, old, new, plan.transforms):
+            where = f"provisioning policy: {read['source']}, {read['where']}"
+            if read["kind"] == "attribute":
+                _use(plan, read["name"], where)
+            elif where not in plan.transforms[read["name"]]["used_by"]:
+                plan.transforms[read["name"]]["used_by"].append(where)
 
     # Old -> new attribute names.
     for attribute, info in plan.attributes.items():
@@ -208,6 +229,8 @@ def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new:
             info["new_attribute"], info["status"] = given, "from the mapping file"
             if new.has(given) is False:
                 info["status"] = "from the mapping file, NOT in the new schema"
+        elif not chosen:
+            info["new_attribute"], info["status"] = "", TO_CHOOSE
         elif new.has(attribute):
             info["new_attribute"] = _schema_name(new, attribute)
             info["status"] = "same name in the new schema"
@@ -235,6 +258,10 @@ def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new:
                 "identity_attribute": mapping.get("identityAttributeName", ""),
                 "before": before, "after": after,
                 "change": "to complete" if TODO in after else "changed" if after != before else "unchanged"})
+        for key in PROFILE_READ_ONLY:
+            draft.pop(key, None)
+        if not chosen:
+            continue
         if item["authoritative"]:
             for key in PROFILE_RUNTIME_FIELDS:
                 draft.pop(key, None)
@@ -243,7 +270,7 @@ def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new:
             plan.drafts[f"identity-profiles/{_file(draft['name'])}.json"] = draft
         else:
             plan.drafts[f"identity-profiles/{_file(profile.get('name', ''))} (updated).json"] = draft
-    for name in plan.transforms:
+    for name in plan.transforms if chosen else []:
         draft = rewrite(transforms[name], plan, renames)
         draft["name"] = renames.get(name, name)
         if not in_place:
@@ -251,19 +278,27 @@ def analyse(profiles: list[dict], transforms: dict[str, dict], old: Source, new:
                 draft.pop(key, None)
         plan.drafts[f"transforms/{_file(draft['name'])}.json"] = draft
 
-    # Criteria using the identity attributes computed from the old source, or reading it.
+    # Every other object that uses the old source, or an identity attribute computed from it.
     touched: dict[str, list[str]] = {}
     for item in plan.profiles:
         for attribute in item["touched"]:
             touched.setdefault(attribute, []).append(item["profile"].get("name", ""))
     plan.impacted = criteria.impacted_attributes(profiles, transforms, touched)
     if objects is not None:
-        plan.criteria = criteria.findings(objects, plan.impacted, old, new, plan.attributes)
+        created = {item["profile"].get("name") for item in plan.profiles if item["authoritative"]}
+        rows = criteria.findings(objects, plan.impacted, old, new, plan.attributes)
+        rows += source_usage.findings(objects, profiles, transforms, old, new, plan.attributes, plan.impacted,
+                                      set(plan.transforms), created)
+        rows.sort(key=lambda r: (r["Severity"] != WARNING, source_usage.TYPE_ORDER.index(r["Type"]),
+                                 r["Object"].lower()))
+        plan.criteria = rows
         plan.criteria_notes = list(objects.notes)
-        plan.criteria_analysed = any(found is not None for found in (objects.roles, objects.segments,
-                                                                     objects.sources))
+        plan.analysed = source_usage.analysed(objects, profiles)
+        plan.criteria_analysed = any(plan.analysed.values())
+        if objects.sources is not None:
+            plan.source = source_usage.source_rows(objects, old, new, len(plan.attributes))
 
-    _checks(plan, profiles)
+    _checks(plan, profiles, objects)
     unknown = {}
     for item in plan.profiles:
         config = item["profile"].get("identityAttributeConfig") or {}
@@ -293,20 +328,31 @@ def _file(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', "_", name).strip() or "unnamed"
 
 
-def _checks(plan: Plan, profiles: list[dict]) -> None:
-    if not plan.profiles and not plan.transforms:
+def _checks(plan: Plan, profiles: list[dict], objects: criteria.Objects | None) -> None:
+    if not plan.profiles and not plan.transforms and not plan.criteria:
         plan.checks.append((WARNING, "", "Nothing found",
-                            f"No identity profile or transform reads '{plan.old.name}'. Check the name."))
-    for attribute, info in plan.attributes.items():
+                            f"No identity profile, transform or other object analysed uses "
+                            f"'{plan.old.name}'. Check the name."))
+    sources = objects.sources if objects is not None else None
+    if sources is not None and not source_usage.find_source(objects, plan.old):
+        plan.checks.append((WARNING, plan.old.name, "Old source not found",
+                            f"None of the {len(sources)} source(s) read is named '{plan.old.name}'. "
+                            "Check the name."))
+    if not plan.chosen:
+        plan.checks.append((INFO, "", "New source not chosen",
+                            f"The actions say '{NOT_CHOSEN}' and no draft is written. Once it is chosen, "
+                            "run again with --new-source (and --attribute-map) to check the attribute names "
+                            "against its schema and get the drafts."))
+    for attribute, info in plan.attributes.items() if plan.chosen else []:
         if info["status"].startswith("TO DEFINE") or "NOT in the new schema" in info["status"]:
             plan.checks.append((WARNING, attribute, "New attribute to define",
                                 f"'{attribute}' ({info['status']}) is used by {len(info['used_by'])} "
                                 "mapping(s)/transform(s). Add it to the attribute mapping file."))
-    if plan.new.schema is None:
+    if plan.chosen and plan.new.schema is None:
         plan.checks.append((INFO, plan.new.name, "New schema unknown",
                             "Attribute names of the new source could not be checked "
                             "(source not found in the tenant, or offline run)."))
-    if not plan.new.id:
+    if plan.chosen and not plan.new.id:
         plan.checks.append((INFO, plan.new.name, "New source id unknown",
                             f"Drafts contain '{NEW_SOURCE_ID}': replace it once the source exists."))
     priorities = ", ".join(str(p) for p in sorted({p.get("priority") for p in profiles} - {None}))
@@ -321,40 +367,74 @@ def _checks(plan: Plan, profiles: list[dict]) -> None:
               and not any(name in other["calls"] for other in plan.transforms.values())]
     for name in unused:
         plan.checks.append((INFO, name, "Transform not used by a profile",
-                            "Reads the old source but no identity profile uses it here; it may be used "
-                            "elsewhere (provisioning policies, other transforms not exported)."))
-    plan.checks += criteria.checks(plan.criteria, plan.criteria_notes)
+                            "Reads the old source but no identity profile or provisioning policy uses it "
+                            "here; it may be used elsewhere (other transforms not exported)."))
+    plan.checks += [(INFO, "", "Not fully analysed", note) for note in plan.criteria_notes]
     if plan.criteria_analysed:
-        outside = ("lifecycle states of the new profile, provisioning policies and workflows using "
-                   "source or identity attributes, certification campaign filters, and identity refresh "
-                   "after the switch")
+        outside = ("applications (source apps), certification campaigns and their filters, access request "
+                   "settings, service desk integrations, saved searches and reports, the code of cloud rules "
+                   "(it cannot be read through the API), and an identity refresh after the switch")
     else:
-        outside = ("lifecycle states of the new profile, correlation of the new HR accounts to existing "
-                   "identities, role and segment criteria, provisioning policies and workflows using "
-                   "source attributes, and identity refresh after the switch")
+        outside = ("the other objects that depend on the source (roles, access profiles, role and segment "
+                   "criteria, SoD policies, lifecycle states, correlation, provisioning policies, workflows, "
+                   "rules: run against the tenant or a snapshot to list them), applications, certification "
+                   "campaigns, and an identity refresh after the switch")
     plan.checks.append((INFO, "", "Outside this analysis", f"Also plan: {outside}."))
 
 
 # -- output ---------------------------------------------------------------------
 
-STEPS = [
-    "Review the 'Attribute mapping' sheet and complete attribute-mapping.csv (old_attribute;new_attribute).",
-    "Run the analysis again with --attribute-map attribute-mapping.csv until no attribute is TO DEFINE.",
-    "Review the drafts in transforms/ and identity-profiles/ (search for TODO_ and <new source id>).",
-    "Review the 'Criteria' sheet: rewrite the role criteria that read the old source, recreate its "
-    "correlation on the new source, and check that the criteria using impacted identity attributes still "
-    "match the new values (role membership is recomputed at the next identity refresh).",
-    "Create the transforms first (copies), then the new identity profile(s), in a sandbox tenant.",
-    "Recreate the lifecycle states of the new profile and set its priority.",
-    "Correlate the new source accounts to the existing identities, then run an identity refresh.",
-    "Compare identity attribute values before and after on a sample of identities.",
-]
+
+def steps(plan: Plan) -> list[str]:
+    """The migration checklist."""
+    found = []
+    if not plan.chosen:
+        found.append("Choose the new source, then run again with --new-source: its account attributes are "
+                     "checked and the draft JSON is written.")
+    found += [
+        "Review the 'Overview' and 'Impacts' sheets: everything that depends on the old source, with what to "
+        "do for each object.",
+        "Complete attribute-mapping.csv (old_attribute;new_attribute) and run again with --attribute-map "
+        "until no attribute is left to define.",
+    ]
+    if plan.chosen:
+        found.append("Review the drafts in transforms/ and identity-profiles/ (search for TODO_ and "
+                     f"{NEW_SOURCE_ID}).")
+    found += [
+        "Configure the new source like the old one where it applies (see 'Old source'): account and manager "
+        "correlation, provisioning policies, rules, password policies, delete threshold.",
+        "Recreate the access profiles of the old source on the new one, grant them instead of the old ones "
+        "in roles and lifecycle states, and replace the entitlements of the old source in roles and SoD "
+        "policies.",
+        "Create the transforms (copies), then the new identity profile(s), in a sandbox tenant; recreate the "
+        "lifecycle states of the new profile and set its priority.",
+        "Rewrite the role criteria and the provisioning policy fields that read the old source; check those "
+        "that use impacted identity attributes (role membership is recomputed at the next identity refresh).",
+        "Point the workflows and connector rules that name the old source to the new one.",
+        "Correlate the accounts of the new source to the existing identities, then run an identity refresh.",
+        "Compare identity attribute values before and after on a sample of identities.",
+    ]
+    return found
+
+
 READ_ME = [
-    ("Purpose", "What has to change in identity profiles, attribute mappings and transforms when the "
-                "old source is replaced by the new one."),
+    ("Purpose", "Everything that has to change when the old source is replaced by a new one: identity "
+                "profiles, attribute mappings and transforms, and every other object that depends on the old "
+                "source. Nothing was changed in the tenant."),
     ("Dashboard", "Key figures and charts."),
     ("Next steps", "The migration checklist."),
+    ("Overview", "For each type of object: how many depend on the old source, how many with a warning, and "
+                 "what to do. 'not analysed': objects of this type were not read (see Checks)."),
+    ("Impacts", "One line per part of an object that depends on the old source: roles and dimensions (their "
+                "criteria, or the access of the old source they grant), access profiles of the old source, "
+                "SoD policies on its entitlements, lifecycle states, account and manager correlation, "
+                "provisioning policies of other sources, segments, workflows and connector rules that name "
+                "it, password "
+                "policies. 'Where' is the part concerned, 'Definition' the whole of it. Warning: an enabled "
+                "object that stops working or changes who gets access; Info: to check."),
     ("Profiles", "Impacted identity profiles and what to do with each."),
+    ("Identity attributes", "The identity attributes computed from the old source, directly or from another "
+                            "impacted attribute, and the objects that use them: their values may change."),
     ("Attribute mapping", "Each old account attribute used, its counterpart in the new source and how it was "
                           "found. Result: OK (confirmed), Assumed (same name, new schema unknown) or To "
                           "define. Fill attribute-mapping.csv and run again with --attribute-map."),
@@ -362,34 +442,75 @@ READ_ME = [
                  "'to complete' means an attribute is still TODO."),
     ("Transforms", "Transforms reading the old source, and transforms calling them (they must follow, "
                    "since they would still call the old version)."),
-    ("Criteria", "Role and dimension membership, segment visibility, and account and manager correlation "
-                 "of the sources that use an identity attribute computed from the old source (directly, or "
-                 "from another impacted attribute), or that read the old source itself. One line per "
-                 "criterion; 'All criteria' shows the whole criteria of the object."),
+    ("Old source", "The configuration of the old source to recreate on the new one: connector, owner, "
+                   "correlation, rules, provisioning policies, access profiles, entitlements, password "
+                   "policies. Its connection settings are not shown."),
     ("Role criteria", "Role membership is recomputed at each identity refresh: if an identity attribute "
                       "gets new values (codes, case, format), identities gain or lose roles and their "
                       "access. A criterion on an account attribute or entitlement of the old source stops "
                       "matching once its accounts are gone."),
     ("Checks", "Points to review, Warning first."),
-    ("Drafts", "identity-profiles/ and transforms/ next to this workbook: JSON ready to review and create. "
-               "Nothing has been changed in the tenant."),
+    ("Drafts", "identity-profiles/ and transforms/ next to this workbook: JSON ready to review and create, "
+               "written once the new source is chosen. Nothing has been changed in the tenant."),
 ]
 RESULT_FILLS = {"OK": "E2F0D9", "Assumed": "FFF2CC", "To define": "F8CBAD"}
 CHANGE_FILLS = {"unchanged": "EDEDED", "changed": "E2F0D9", "to complete": "F8CBAD"}
 WIDE = {"Used by", "Today", "After the migration", "Details", "Step", "Action", "Attributes to change",
-        "Used by (profile: attribute)", "Old attributes read", "Calls", "Criterion", "Uses", "Impact",
-        "All criteria"}
+        "Old attributes read", "Calls", "Where", "Uses", "Impact", "Definition", "What to do", "Objects",
+        "Why its value may change", "Old source", "On the new source"}
 SEVERITY_FILLS = {WARNING: "F8CBAD", INFO: "DDEBF7"}
+OVERVIEW_COLUMNS = ["Object type", "To change", "Warnings", "What to do"]
 
 
 def _result(status: str) -> str:
-    if status.startswith("TO DEFINE") or "NOT in the new schema" in status:
+    if status.upper().startswith("TO DEFINE") or "NOT in the new schema" in status:
         return "To define"
     return "Assumed" if "assumed" in status else "OK"
 
 
+def overview_rows(plan: Plan) -> list[dict]:
+    """One row per type of object: how many depend on the old source, and what to do."""
+    to_define = sum(_result(i["status"]) == "To define" for i in plan.attributes.values())
+    new_profiles = sum(p["authoritative"] for p in plan.profiles)
+    rows = [
+        ("Identity profile", len(plan.profiles), new_profiles,
+         "Create a new profile for the new source (the warnings), or edit the mappings that read the old one "
+         "(see Profiles and Mappings)."),
+        ("Identity attribute", len(plan.impacted), "",
+         "Compare their values before and after on a sample of identities (see Identity attributes)."),
+        ("Transform", len(plan.transforms), "",
+         "Copy them to read the new source, with the transforms that call them (see Transforms)."),
+        ("Account attribute of the old source", len(plan.attributes), to_define,
+         "Give each one its counterpart in the new source (see Attribute mapping)."),
+    ]
+    for kind in source_usage.TYPE_ORDER:
+        found = [r for r in plan.criteria if r["Type"] == kind]
+        if not plan.analysed.get(kind):
+            rows.append((kind, "not analysed", "", source_usage.WHAT_TO_DO[kind]))
+            continue
+        warned = {r["Object"] for r in found if r["Severity"] == WARNING}
+        rows.append((kind, len({r["Object"] for r in found}), len(warned),
+                     source_usage.WHAT_TO_DO[kind] if found else "Nothing to change."))
+    return [dict(zip(OVERVIEW_COLUMNS, row, strict=True)) for row in rows]
+
+
+def attribute_rows(plan: Plan) -> list[dict]:
+    """The identity attributes whose value may change, with the objects that use them."""
+    rows = []
+    for name, why in sorted(plan.impacted.items(), key=lambda kv: kv[0].lower()):
+        uses = f"identity attribute '{name.lower()}'"
+        users = [f"{r['Type']}: {r['Object']}" for r in plan.criteria if r["Uses"].lower() == uses]
+        users += [f"Identity attribute: {other}" for other, reason in plan.impacted.items()
+                  if reason == f"computed from '{name}'"]
+        users = list(dict.fromkeys(users))
+        rows.append({"Identity attribute": name, "Why its value may change": why, "Used by": len(users),
+                     "Objects": "\n".join(users)})
+    return rows
+
+
 def build_dashboard(plan: Plan, title: str = "") -> dashboard.Dashboard:
-    title = title or f"Source migration: {plan.old.name} → {plan.new.name}"
+    title = title or (f"Source migration: {plan.old.name} → {plan.new.name}" if plan.chosen
+                      else f"Source migration: {plan.old.name} (new source not chosen)")
     attributes = [{"Old attribute": a, "New attribute": i["new_attribute"], "Result": _result(i["status"]),
                    "Status": i["status"], "Uses": len(i["used_by"]), "Used by": "\n".join(i["used_by"])}
                   for a, i in sorted(plan.attributes.items(), key=lambda kv: kv[0].lower())]
@@ -401,29 +522,41 @@ def build_dashboard(plan: Plan, title: str = "") -> dashboard.Dashboard:
                  "Action": p["action"], "Attributes to change": ", ".join(p["touched"])}
                 for p in plan.profiles]
     transforms = [{"Transform": n, "Impact": i["impact"], "Old attributes read": "\n".join(i["attributes"]),
-                   "Calls": "\n".join(i["calls"]), "Used by (profile: attribute)": "\n".join(i["used_by"]),
-                   "Draft name": n if plan.in_place else f"{n}{plan.suffix}"}
+                   "Calls": "\n".join(i["calls"]), "Used by": "\n".join(i["used_by"]),
+                   "Draft name": "" if not plan.chosen else n if plan.in_place else f"{n}{plan.suffix}"}
                   for n, i in sorted(plan.transforms.items())]
     checks = [{"Severity": c[0], "Object": c[1], "Check": c[2], "Details": c[3]}
               for c in sorted(plan.checks, key=lambda c: (c[0] != WARNING, c[1].lower()))]
+    overview = overview_rows(plan)
 
     results = Counter(row["Result"] for row in attributes)
     changes = Counter(row["Change"] for row in mappings)
     reading = sum(i["impact"] == "reads the old source" for i in plan.transforms.values())
     new_profiles = sum(p["authoritative"] for p in plan.profiles)
-    warnings = sum(c[0] == WARNING for c in plan.checks)
+    severities = [c[0] for c in plan.checks] + [r["Severity"] for r in plan.criteria]
+    warnings = severities.count(WARNING)
+    to_define = (("New attribute to define", str(results["To define"]),
+                  dashboard.RED if results["To define"] else dashboard.GREEN) if plan.chosen
+                 else ("New source", "not chosen", dashboard.GREY))
     kpis = [
         ("Identity profiles impacted", f"{len(plan.profiles)}  ({new_profiles} new to create)",
          dashboard.BLUE),
-        ("Attribute mappings changing", str(changes["changed"] + changes["to complete"]), dashboard.BLUE),
+        ("Identity attributes impacted", str(len(plan.impacted)), dashboard.BLUE),
         ("Transforms impacted", f"{len(plan.transforms)}  ({reading} read the old source)", dashboard.BLUE),
         ("Old source attributes used", str(len(attributes)), dashboard.BLUE),
-        ("New attribute to define", str(results["To define"]),
-         dashboard.RED if results["To define"] else dashboard.GREEN),
-        _criteria_tile(plan),
+        to_define,
+        _objects_tile(plan),
         ("Warnings", str(warnings), dashboard.RED if warnings else dashboard.GREEN),
     ]
     charts = []
+    by_type = Counter(r["Type"] for r in plan.criteria)
+    labels = [kind for kind in source_usage.TYPE_ORDER if by_type[kind]]
+    if labels:
+        series = [(severity, [len({r["Object"] for r in plan.criteria
+                                   if r["Type"] == kind and r["Severity"] == severity}) for kind in labels],
+                   colour) for severity, colour in ((WARNING, dashboard.RED), (INFO, dashboard.BLUE))]
+        charts.append(dashboard.Chart("Objects to change by type", "stacked", labels,
+                                      [s for s in series if any(s[1])]))
     labels = [r for r in RESULT_FILLS if results[r]]
     if labels:
         charts.append(dashboard.Chart("Old attributes: new counterpart", "doughnut", labels,
@@ -432,46 +565,55 @@ def build_dashboard(plan: Plan, title: str = "") -> dashboard.Dashboard:
     if labels:
         charts.append(dashboard.Chart("Mappings of the impacted profiles", "doughnut", labels,
                                       [("Mappings", [changes[c] for c in labels], "")]))
+    next_steps = [{"#": i, "Step": s} for i, s in enumerate(steps(plan), start=1)]
     tables = [
-        dashboard.Table("Next steps", [{"#": i, "Step": s} for i, s in enumerate(STEPS, start=1)], wide=WIDE),
+        dashboard.Table("Next steps", next_steps, wide=WIDE),
+        dashboard.Table("Overview", overview, wide=WIDE, red_positive={"Warnings"}),
+        dashboard.Table("Impacts", plan.criteria, wide=WIDE, fills={"Severity": SEVERITY_FILLS}),
         dashboard.Table("Profiles", profiles, wide=WIDE),
+        dashboard.Table("Identity attributes", attribute_rows(plan), wide=WIDE),
         dashboard.Table("Attribute mapping", attributes, wide=WIDE, fills={"Result": RESULT_FILLS}),
         dashboard.Table("Mappings", mappings, wide=WIDE, fills={"Change": CHANGE_FILLS}),
         dashboard.Table("Transforms", transforms, wide=WIDE),
-        dashboard.Table("Criteria", plan.criteria, wide=WIDE, fills={"Severity": SEVERITY_FILLS}),
+        dashboard.Table("Old source", plan.source, wide=WIDE),
         dashboard.Table("Checks", checks, wide=WIDE, fills={"Severity": SEVERITY_FILLS}),
     ]
     sections = [
-        dashboard.Section("Next steps", [{"#": i, "Step": s} for i, s in enumerate(STEPS, start=1)],
-                          ["#", "Step"]),
+        dashboard.Section("Next steps", next_steps, ["#", "Step"]),
+        dashboard.Section("Overview", overview, OVERVIEW_COLUMNS),
         dashboard.Section("Impacted identity profiles", profiles,
                           ["Profile", "Authoritative source", "Action", "Attributes to change"]),
         dashboard.Section("Attribute mapping", attributes,
                           ["Old attribute", "New attribute", "Result", "Uses"]),
         dashboard.Section("Mappings that change", [m for m in mappings if m["Change"] != "unchanged"],
                           ["Profile", "Identity attribute", "Change", "Today", "After the migration"]),
-        dashboard.Section("Criteria to review", plan.criteria,
-                          ["Severity", "Type", "Object", "Criterion", "Action"]),
+        dashboard.Section("Objects to change", plan.criteria,
+                          ["Severity", "Type", "Object", "Where", "Uses", "Action"]),
+        dashboard.Section("Old source", plan.source, ["Setting", "Old source", "On the new source"]),
         dashboard.Section("Points to check", checks, ["Severity", "Object", "Check", "Details"]),
     ]
-    how = "updated in place" if plan.in_place else f"copied with the suffix '{plan.suffix}'"
+    if not plan.chosen:
+        how = "no drafts: new source not chosen"
+    else:
+        how = ("transforms updated in place" if plan.in_place
+               else f"transforms copied with the suffix '{plan.suffix}'")
     return dashboard.Dashboard(
-        title, dashboard.subtitle("identity profiles, attribute mappings and transforms",
-                                  f"transforms {how}"),
+        title, dashboard.subtitle("everything that depends on the old source", how),
         kpis, charts, tables, sections, READ_ME,
         colours={"OK": dashboard.GREEN, "Assumed": dashboard.AMBER, "To define": dashboard.RED,
                  "unchanged": dashboard.GREY, "changed": dashboard.GREEN, "to complete": dashboard.RED},
         wide_pdf={"Step", "Action", "Attributes to change", "Today", "After the migration", "Details",
-                  "Criterion"},
+                  "Object", "Where", "Uses", "What to do", "Old source", "On the new source"},
         alert=lambda row: row.get("Severity") == WARNING or row.get("Result") == "To define")
 
 
-def _criteria_tile(plan: Plan) -> tuple[str, str, str]:
+def _objects_tile(plan: Plan) -> tuple[str, str, str]:
     if not plan.criteria_analysed:
-        return ("Criteria to review", "not analysed", dashboard.GREY)
-    roles = len({r["Object"] for r in plan.criteria if r["Type"] in (criteria.ROLE, criteria.DIMENSION)})
+        return ("Objects to change", "not analysed", dashboard.GREY)
+    objects = {(r["Type"], r["Object"]) for r in plan.criteria}
+    types = {r["Type"] for r in plan.criteria}
     warned = any(r["Severity"] == WARNING for r in plan.criteria)
-    return ("Criteria to review", f"{len(plan.criteria)}  ({roles} role(s) or dimension(s))",
+    return ("Objects to change", f"{len(objects)}  ({len(types)} type(s))",
             dashboard.RED if warned else dashboard.GREEN)
 
 

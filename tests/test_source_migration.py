@@ -196,8 +196,11 @@ def test_cli_offline(tmp_path):
     from openpyxl import load_workbook
 
     book = load_workbook(out / "source-migration.xlsx")
-    assert book.sheetnames == ["Dashboard", "Next steps", "Profiles", "Attribute mapping", "Mappings",
-                               "Transforms", "Criteria", "Checks", "Chart data", "Read me"]
+    assert book.sheetnames == ["Dashboard", "Next steps", "Overview", "Impacts", "Profiles",
+                               "Identity attributes", "Attribute mapping", "Mappings", "Transforms",
+                               "Old source", "Checks", "Chart data", "Read me"]
+    overview = {row[0]: row[1] for row in book["Overview"].iter_rows(min_row=2, values_only=True)}
+    assert overview["Identity profile"] == 2 and overview["Role"] == "not analysed"   # only profiles exported
 
 
 @pytest.fixture
@@ -209,12 +212,12 @@ def criteria_plan():
 
 
 def test_criteria_using_impacted_identity_attributes_or_the_old_source(criteria_plan):
-    rows = {(r["Object"], r["Criterion"]): r for r in criteria_plan.criteria}
+    rows = {(r["Object"], r["Where"]): r for r in criteria_plan.criteria}
     department = rows[("Finance", 'identity.department EQUALS "Finance"')]
     assert (department["Severity"], department["Type"], department["Enabled"]) == ("Warning", "Role", "yes")
     assert department["Impact"].startswith(
         "Identity attribute computed from the old source (IP_Contractors):")
-    assert department["All criteria"] == ('(identity.department EQUALS "Finance" AND identity.location '
+    assert department["Definition"] == ('(identity.department EQUALS "Finance" AND identity.location '
                                           'EQUALS "Paris") OR HR.status EQUALS "A"')
     status = rows[("Finance", 'HR.status EQUALS "A"')]
     assert status["Uses"] == "HR account attribute 'status'"
@@ -224,7 +227,7 @@ def test_criteria_using_impacted_identity_attributes_or_the_old_source(criteria_
     leavers = rows[("Managers / Leavers", 'identity.cloudLifecycleState EQUALS "inactive"')]
     assert leavers["Type"] == "Role dimension"                                 # LCS comes from HR status
     segment = rows[("Finance visibility", 'identity.department EQUALS "Finance"')]
-    assert (segment["Severity"], segment["All criteria"]) == (
+    assert (segment["Severity"], segment["Definition"]) == (
         "Info", 'identity.department EQUALS "Finance" AND identity.location EQUALS "Paris"')
     ad = rows[("AD", "uid = sAMAccountName")]
     assert (ad["Severity"], ad["Type"], ad["Uses"]) == (
@@ -235,7 +238,7 @@ def test_criteria_using_impacted_identity_attributes_or_the_old_source(criteria_
     # attributes that are not impacted, identity lists and the new source itself are not reported
     assert {r["Object"] for r in criteria_plan.criteria} == {
         "Finance", "Old HR group", "Managers / Leavers", "Finance visibility", "AD", "HR"}
-    assert not any("location" in r["Criterion"] or "email" in r["Criterion"] for r in criteria_plan.criteria)
+    assert not any("location" in r["Where"] or "email" in r["Where"] for r in criteria_plan.criteria)
     assert criteria_plan.criteria[0]["Severity"] == "Warning"
 
 
@@ -244,9 +247,6 @@ def test_old_source_attributes_of_criteria_join_the_attribute_mapping(criteria_p
     assert criteria_plan.attributes["managerId"]["used_by"] == ["manager correlation"]
     checks = {(c[1], c[2]): c[0] for c in criteria_plan.checks}
     assert checks[("managerId", "New attribute to define")] == "Warning"
-    assert checks[("Finance", "Role criteria to review")] == "Warning"
-    assert checks[("Finance visibility", "Segment criteria to review")] == "Info"
-    assert checks[("AD", "Account correlation criteria to review")] == "Warning"
     outside = next(c[3] for c in criteria_plan.checks if c[2] == "Outside this analysis")
     assert "role and segment criteria" not in outside
 
@@ -255,11 +255,11 @@ def test_old_source_attributes_of_criteria_join_the_attribute_mapping(criteria_p
     from isc_reporter.source_migration import build_dashboard, write_outputs
 
     tiles = {label: value for label, value, _ in build_dashboard(criteria_plan).kpis}
-    assert tiles["Criteria to review"] == "8  (3 role(s) or dimension(s))"
+    assert tiles["Objects to change"] == "7  (5 type(s))"
     write_outputs(criteria_plan, str(tmp_path), pdf=True)
-    sheet = load_workbook(tmp_path / "source-migration.xlsx")["Criteria"]
-    assert [c.value for c in sheet[1]] == ["Severity", "Type", "Object", "Enabled", "Criterion", "Uses",
-                                           "Impact", "Action", "All criteria"]
+    sheet = load_workbook(tmp_path / "source-migration.xlsx")["Impacts"]
+    assert [c.value for c in sheet[1]] == ["Severity", "Type", "Object", "Enabled", "Where", "Uses",
+                                           "Impact", "Action", "Definition"]
     assert sheet.max_row == 9
     assert "managerId;;TO DEFINE" in (tmp_path / "attribute-mapping.csv").read_text(encoding="utf-8-sig")
 
@@ -283,12 +283,12 @@ def test_without_criteria_nothing_is_claimed(plan):
     assert not plan.criteria_analysed and plan.criteria == []
     assert "role and segment criteria" in next(c[3] for c in plan.checks if c[2] == "Outside this analysis")
     tiles = {label: value for label, value, _ in build_dashboard(plan).kpis}
-    assert tiles["Criteria to review"] == "not analysed"
+    assert tiles["Objects to change"] == "not analysed"
     # nothing could be read: the reasons are reported, and the analysis is not presented as done
     unread = analyse(PROFILES, TRANSFORMS, Source("HR"), NEW,
                      objects=Objects(notes=["Roles not read (HTTP 403: Forbidden)."]))
     assert not unread.criteria_analysed
-    note = ("Info", "", "Criteria not fully analysed", "Roles not read (HTTP 403: Forbidden).")
+    note = ("Info", "", "Not fully analysed", "Roles not read (HTTP 403: Forbidden).")
     assert note in unread.checks
 
 
@@ -409,7 +409,7 @@ def test_cli_against_tenant(tmp_path, monkeypatch):
 
     from openpyxl import load_workbook
 
-    sheet = load_workbook(out / "source-migration.xlsx")["Criteria"]
+    sheet = load_workbook(out / "source-migration.xlsx")["Impacts"]
     found = {(row[1], row[2], row[4]) for row in sheet.iter_rows(min_row=2, values_only=True)}
     assert ("Role", "Finance", 'HR.status EQUALS "A"') in found              # source id shown as its name
     assert ("Role dimension", "Managers / Leavers", 'identity.cloudLifecycleState EQUALS "inactive"') in found

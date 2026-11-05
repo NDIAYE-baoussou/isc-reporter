@@ -5,6 +5,21 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `migration`: everything that depends on the source to replace, with what to do for each object.
+  - `--new-source` is now optional: when the new source is not chosen yet, the report lists the
+    impacts and the attributes in use, without drafts.
+  - *Impacts* replaces the *Criteria* sheet and adds the roles and dimensions that grant access of
+    the old source, its access profiles, SoD policies on its entitlements, lifecycle states,
+    provisioning policies of the other sources, workflows and connector rules that name it, the
+    rules it runs and password policies. Its columns *Criterion* and *All criteria* are now *Where*
+    and *Definition*. The objects are no longer repeated in the *Checks* sheet.
+  - New sheets: *Overview* (what to do by type of object), *Identity attributes* (those computed
+    from the old source and what uses them) and *Old source* (its configuration to recreate).
+  - New checks: *Old source not found*, *New source not chosen*.
+- Fixed: `migration` wrote the lifecycle states of a snapshot into the identity profile drafts.
+- Fixed: `migration --from` missed the role criteria reading a source that no profile is
+  authoritative on, when the export has no schema for it.
+
 ## [0.5.0] - 2026-11-02
 
 - `sources`: status and capabilities of every source, one line each. It shows:

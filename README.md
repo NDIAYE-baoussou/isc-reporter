@@ -43,7 +43,7 @@ change would do before you make it. It only reads from the tenant.
 | `sources` | Status and capabilities of every source: health and virtual appliance cluster, **how ISC provisions it** (its connector, a service desk integration or manual work items), features (provisioning, enable / disable, passwords, unlock...), provisioning policies, account correlation, attribute synchronization, aggregation schedule and last aggregation, accounts and uncorrelated accounts, with checks. | xlsx, pdf, csv | Experimental |
 | `mappings` | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, where else the attribute is used, and checks for likely mistakes; how the named transforms depend on each other, as trees and as an interactive map; what each lifecycle state provisions, source by source. | xlsx, pdf, interactive html | Beta |
 | `transforms` | Transform analysis: what is broken (missing or looping transforms), risky (lookup without default, identity attributes read in profile mappings), repeated (duplicates, same logic for other inputs, copies, blocks in several places), unused, too complex or recomputed every night for nothing, following SailPoint's transform guidance, with **optimized JSON drafts** of the changes that give the same result, and an **optimization plan for the whole tenant**: named transforms before and after, transform steps per identity profile. | xlsx, pdf, JSON drafts | Experimental |
-| `migration` | Impact of replacing a source (typically a new HR system) on identity profiles, transforms and attribute mappings, before / after, with draft JSON for the new objects, and the role, segment and correlation criteria that use the impacted attributes. | xlsx, pdf, csv, JSON drafts | Beta |
+| `migration` | Impact of replacing a source (a new HR system, or any other), even when the new one is not chosen yet: everything that depends on it, with what to do for each object. Identity profiles, identity attributes, transforms and mappings before / after, roles, access profiles, SoD policies, lifecycle states, correlation, provisioning policies, segments, workflows, connector rules and password policies, with draft JSON once the new source is known. | xlsx, pdf, csv, JSON drafts | Beta |
 | `analyze-before-sync` | Forecast of the updates ISC could send to a target system if attribute synchronization is enabled on a source: values added, changed or cleared, per attribute and per account. | xlsx, pdf, csv | Experimental |
 | `leavers` | Identities in a leaver lifecycle state that still have enabled accounts, and for each account whether the lifecycle state should have disabled it (a failure to fix) or does not cover it (a configuration gap). | xlsx, pdf, csv | Beta |
 | `role-impact` | Before enabling a role: the identities its membership criteria select, the entitlements ISC would provision to them and the accounts it would create, who would lose the role, and who already holds its access without matching. Works on a draft role with new criteria too. | xlsx, pdf, csv | Experimental |
@@ -385,27 +385,56 @@ identity only. *Complexity* shows where each named transform is used and for how
 ![Source migration](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/migration.png)
 
 ```bash
+isc-reporter migration --old-source "HR System"                       # the new source is not chosen yet
 isc-reporter migration --old-source "HR System" --new-source "New HR"
 # complete outputs/source-migration_<ts>/attribute-mapping.csv, then:
 isc-reporter migration --old-source "HR System" --new-source "New HR" --attribute-map attribute-mapping.csv
+isc-reporter migration --old-source "Active Directory" --from snapshot/  # offline, from a snapshot
 ```
 
-Finds the identity profiles authoritative on or reading the old source, the transforms reading
-it and those calling them, matches each old account attribute to the new source (mapping file,
-or same name in the new account schema), shows every mapping before and after, and writes draft
-JSON for the new identity profiles and transforms. Transforms are copied with a suffix so both
-sources can run in parallel (`--in-place` to update them instead).
+Lists everything that depends on the source to replace, an HR system or any other, with what to do
+for each object. The new source does not need to be known: without `--new-source` the actions say
+*the new source*, the attributes in use are listed in `attribute-mapping.csv` to fill in, and no
+draft is written.
 
-The *Criteria* sheet lists what selects identities or matches accounts on the identity attributes
-computed from the old source (directly, or from another impacted attribute): role and dimension
-membership criteria, segment visibility, and the account and manager correlation of the other
-sources. Their result depends on the new values: if `department` gets new codes, identities gain
-or lose roles, and their access, at the next identity refresh. Criteria that read the old source
-itself (account attributes or entitlements in role criteria, and its own correlation) are listed
-with their rewrite on the new source, and their account attributes are added to
-`attribute-mapping.csv`. With `--from`, roles, segments and sources are read from the export when
-it contains them. Lifecycle states, provisioning policies and workflows are listed as next steps,
-not analysed.
+- *Overview*: for each type of object, how many depend on the old source, how many with a warning,
+  and what to do.
+- *Impacts*: one line per part of an object that depends on the old source, with its impact and the
+  action:
+  - **roles and dimensions**: membership criteria on identity attributes computed from the old
+    source (if `department` gets new codes, identities gain or lose roles, and their access, at the
+    next identity refresh), criteria that read its accounts or entitlements, and the access profiles
+    and entitlements of the old source they grant;
+  - **access profiles** of the old source, with the roles, dimensions and lifecycle states that
+    grant them and their segments;
+  - **SoD policies** on its entitlements;
+  - **lifecycle states**: those of the identity profile to recreate, and the account actions and
+    access profiles that concern the old source;
+  - **account and manager correlation**: of the old source, to recreate, and of the other sources
+    when they use impacted identity attributes;
+  - **provisioning policies** of the other sources: the fields that read the old source, and those
+    that read impacted identity attributes (with attribute synchronization, new values are sent to
+    the accounts: run `analyze-before-sync`);
+  - **segments** whose visibility uses impacted identity attributes;
+  - **workflows** and **connector rules** that name the old source, and the rules it runs;
+  - **password policies** that cover it.
+- *Identity attributes*: those computed from the old source, directly or from another impacted
+  attribute, and the objects that use them.
+- *Old source*: its configuration to recreate on the new one (connector, owner, correlation, rules,
+  provisioning policies, access profiles, entitlements, password policies). Its connection settings
+  are left out.
+
+Once the new source is given, each old account attribute is matched to it (mapping file, or same
+name in its account schema), every mapping is shown before and after, and draft JSON is written for
+the new identity profiles and transforms. Transforms are copied with a suffix so both sources can
+run in parallel (`--in-place` to update them instead).
+
+With `--from`, objects are read from the export; a snapshot holds them all, and a type that is
+missing is shown as *not analysed*. A snapshot does not hold entitlements, so SoD policies and roles
+are checked against the entitlements of the access profiles of the old source only. Rules are found
+by the source name or id in their code, a workflow by the same in its definition. The code of cloud
+rules cannot be read through the API. Applications, certification campaigns, access request settings,
+service desk integrations and saved searches are listed as next steps, not analysed.
 
 ### Before enabling attribute synchronization
 

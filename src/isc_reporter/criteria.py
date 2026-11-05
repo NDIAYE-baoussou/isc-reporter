@@ -10,7 +10,6 @@ that read the old source itself must be rewritten for the new one.
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from dataclasses import dataclass, field
 
 from isc_reporter import attribute_usage
@@ -23,17 +22,26 @@ CORRELATION, MANAGER = "Account correlation", "Manager correlation"
 TYPE_ORDER = (ROLE, DIMENSION, CORRELATION, MANAGER, SEGMENT)
 ROLE_PAGE = 50                 # the roles and dimensions APIs return 50 items per call at most
 PREFIX = "attribute."          # role criteria keys look like "attribute.department"
-COLUMNS = ["Severity", "Type", "Object", "Enabled", "Criterion", "Uses", "Impact", "Action", "All criteria"]
+#: Columns of a finding: "Where" is the part of the object concerned (a criterion, a field...), "Definition"
+#: the whole of it (all the criteria of the object...).
+COLUMNS = ["Severity", "Type", "Object", "Enabled", "Where", "Uses", "Impact", "Action", "Definition"]
 
 
 @dataclass
 class Objects:
-    """Objects holding criteria. None means "not read"; *notes* says why."""
+    """Configuration objects that may depend on a source. None means "not read"; *notes* says why.
+    The criteria read here; :mod:`isc_reporter.source_usage` reads the others."""
 
     roles: list[dict] | None = None          # dynamic roles carry their "dimensions"
     segments: list[dict] | None = None
-    sources: list[dict] | None = None        # with their "correlationConfig" when read
+    sources: list[dict] | None = None        # with "correlationConfig" and "provisioningPolicies" when read
     notes: list[str] = field(default_factory=list)
+    access_profiles: list[dict] | None = None
+    sod_policies: list[dict] | None = None
+    workflows: list[dict] | None = None
+    rules: list[dict] | None = None          # connector rules, with their code
+    password_policies: list[dict] | None = None
+    entitlements: list[dict] | None = None   # of the old source (search documents)
 
 
 # -- reading ----------------------------------------------------------------------------------
@@ -186,20 +194,6 @@ def findings(objects: Objects, impacted: dict[str, str], old, new, attributes: d
             rows += _correlation_rows(source, impacted, old, new, attributes)
     rows.sort(key=lambda r: (r["Severity"] != WARNING, TYPE_ORDER.index(r["Type"]), r["Object"].lower()))
     return rows
-
-
-def checks(rows: list[dict], notes: list[str]) -> list[tuple[str, str, str, str]]:
-    """One ``(severity, object, check, details)`` per object to review, and the reading notes."""
-    by_object: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for row in rows:
-        by_object[(row["Type"], row["Object"])].append(row)
-    out = []
-    for (kind, name), items in by_object.items():
-        severity = WARNING if any(r["Severity"] == WARNING for r in items) else INFO
-        uses = ", ".join(dict.fromkeys(r["Uses"] for r in items))
-        out.append((severity, name, f"{kind} criteria to review", f"Uses {uses} (see the Criteria sheet)."))
-    out += [(INFO, "", "Criteria not fully analysed", note) for note in notes]
-    return out
 
 
 def _criteria_rows(kind, name, enabled, criteria, impacted, old, new, attributes, names) -> list[dict]:

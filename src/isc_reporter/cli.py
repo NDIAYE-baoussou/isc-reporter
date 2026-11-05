@@ -280,18 +280,21 @@ def _source_from_files(paths: list[str], name: str):
 
 
 def _migration(args) -> int:
-    from isc_reporter import criteria, identity_profiles, source_migration
+    from isc_reporter import criteria, identity_profiles, source_migration, source_usage
 
     if args.source:
         profiles, transforms = identity_profiles.load_files(args.source)
-        old, new = (_source_from_files(args.source, name) for name in (args.old_source, args.new_source))
+        old = _source_from_files(args.source, args.old_source)
+        new = _source_from_files(args.source, args.new_source) if args.new_source else None
         objects = criteria.load_files(args.source)
+        source_usage.load_files(args.source, objects)
     else:
         isc = _connect(args)
         profiles, transforms, _ = identity_profiles.fetch(isc)
         old = _source_with_schema(isc, args.old_source)
-        new = _source_with_schema(isc, args.new_source)
+        new = _source_with_schema(isc, args.new_source) if args.new_source else None
         objects = criteria.fetch(isc)
+        source_usage.fetch(isc, objects, profiles, old)
     for note in objects.notes:
         log.warning("%s", note)
     plan = source_migration.analyse(profiles, transforms, old, new,
@@ -299,13 +302,18 @@ def _migration(args) -> int:
                                     in_place=args.in_place, suffix=args.suffix, objects=objects)
     folder = args.output or output_path(args.output_dir, "source-migration", "")
     workbook = source_migration.write_outputs(plan, folder, pdf=not args.no_pdf)
-    to_define = sum(info["status"].startswith("TO DEFINE") for info in plan.attributes.values())
-    log.info("%d identity profile(s), %d transform(s) and %d source attribute(s) impacted; "
-             "%d attribute(s) still to define", len(plan.profiles), len(plan.transforms),
-             len(plan.attributes), to_define)
-    log.info("%d criteria to review (roles, dimensions, segments, correlation)", len(plan.criteria))
+    results = [source_migration._result(info["status"]) for info in plan.attributes.values()]
+    to_define = results.count("To define")
+    log.info("%d identity profile(s), %d transform(s), %d identity attribute(s) and %d source attribute(s) "
+             "impacted; %d attribute(s) still to define", len(plan.profiles), len(plan.transforms),
+             len(plan.impacted), len(plan.attributes), to_define)
+    log.info("%d other object(s) to change, %d with a warning: see the Overview and Impacts sheets",
+             len({(r["Type"], r["Object"]) for r in plan.criteria}),
+             len({(r["Type"], r["Object"]) for r in plan.criteria if r["Severity"] == "Warning"}))
+    if not plan.chosen:
+        log.info("New source not chosen: no draft written; run again with --new-source once it is")
     log.info("Analysis: %s", workbook)
-    log.info("Drafts and attribute-mapping.csv: %s", folder)
+    log.info("%s: %s", "Drafts and attribute-mapping.csv" if plan.chosen else "attribute-mapping.csv", folder)
     return 0
 
 
@@ -625,10 +633,15 @@ def build_parser() -> argparse.ArgumentParser:
     formats(p, ("xlsx", "pdf"))
     output(p, "output folder")
 
-    p = command("migration", _migration, "Impact of replacing a source by another on identity profiles, "
-                                         "mappings and transforms, with draft JSON. Changes nothing.")
-    p.add_argument("--old-source", required=True, metavar="NAME")
-    p.add_argument("--new-source", required=True, metavar="NAME")
+    p = command("migration", _migration, "Impact of replacing a source: identity profiles, mappings and "
+                                         "transforms, and every object that depends on it (roles, access "
+                                         "profiles, SoD policies, lifecycle states, provisioning policies, "
+                                         "workflows, rules...), with what to do and draft JSON. Changes "
+                                         "nothing.")
+    p.add_argument("--old-source", required=True, metavar="NAME", help="the source to replace")
+    p.add_argument("--new-source", metavar="NAME",
+                   help="the source that replaces it; leave it out when it is not chosen yet: the impacts "
+                        "are listed, without drafts")
     p.add_argument("--attribute-map", metavar="CSV", help="old_attribute;new_attribute (the "
                                                           "attribute-mapping.csv of a previous run)")
     p.add_argument("--from", dest="source", nargs="+", metavar="PATH",

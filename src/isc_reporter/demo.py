@@ -252,7 +252,8 @@ def sample_lifecycle():
                                        "Contractor Register")}
     employees = [
         state("prehire", None, 0, enabled=False, notify=(), priority=5),
-        state("active", "ACTIVE", 1754, act("ENABLE", all_sources=True), granted=["birthright"], priority=10),
+        state("active", "ACTIVE", 1754, act("ENABLE", all_sources=True),
+              granted=["birthright", "hr-self-service"], priority=10),
         state("inactive", "INACTIVE_SHORT_TERM", 61, act("DISABLE", all_sources=True, excluded=["HR System"]),
               priority=20),
         state("gardenLeave", "INACTIVE_SHORT_TERM", 4, priority=30),
@@ -266,7 +267,8 @@ def sample_lifecycle():
         state("inactive", "INACTIVE_SHORT_TERM", 32, act("DISABLE", all_sources=True), priority=20),
     ]
     return Lifecycle({"Employees": employees, "Contractors": contractors}, sources,
-                     {"birthright": "Birthright - Active Directory"})
+                     {"birthright": "Birthright - Active Directory",
+                      "hr-self-service": "HR Portal - Self service"})
 
 
 def sample_snapshot():
@@ -294,7 +296,10 @@ def sample_snapshot():
                    "multi": False, "searchable": True} for name, label in STANDARD_NAMES.items()]
     return Snapshot("demo", {"transforms": list(transforms.values()), "identity-profiles": profiles,
                              "identity-attributes": attributes, "sources": sources, "roles": objects.roles,
-                             "segments": objects.segments})
+                             "access-profiles": objects.access_profiles, "segments": objects.segments,
+                             "connector-rules": objects.rules, "workflows": objects.workflows,
+                             "sod-policies": objects.sod_policies,
+                             "password-policies": objects.password_policies})
 
 
 def sample_sources(now: datetime):
@@ -451,8 +456,61 @@ def sample_transform_analysis() -> tuple[list[dict], dict[str, dict], list[dict]
 
 
 def sample_criteria():
-    """Roles, a segment and source correlations of the fictional tenant, some using HR attributes."""
+    """The configuration objects of the fictional tenant that may depend on the HR source: roles, a segment,
+    sources with their correlation and provisioning policies, access profiles and entitlements, an SoD
+    policy, workflows, connector rules and a password policy."""
     from isc_reporter.criteria import Objects
+
+    hr = {"type": "SOURCE", "id": "HR System", "name": "HR System"}
+    ad = {"type": "SOURCE", "id": "Active Directory", "name": "Active Directory"}
+    entitlements = [{"id": key, "name": name, "privileged": privileged, "source": hr}
+                    for key, name, privileged in (("hr-portal-user", "HR Portal User", False),
+                                                  ("hr-portal-admin", "HR Portal Admin", True),
+                                                  ("payroll-approver", "Payroll Approver", True),
+                                                  ("hr-reports", "HR Reports Viewer", False))]
+    granted = {e["id"]: {"type": "ENTITLEMENT", "id": e["id"], "name": e["name"]} for e in entitlements}
+    access_profiles = [
+        {"id": "hr-self-service", "name": "HR Portal - Self service", "enabled": True, "requestable": False,
+         "source": hr, "entitlements": [granted["hr-portal-user"]], "segments": []},
+        {"id": "hr-administration", "name": "HR Portal - Administration", "enabled": True,
+         "requestable": True, "source": hr,
+         "entitlements": [granted["hr-portal-admin"], granted["payroll-approver"]],
+         "segments": ["Finance applications"]},
+        {"id": "birthright", "name": "Birthright - Active Directory", "enabled": True, "requestable": False,
+         "source": ad,
+         "entitlements": [{"type": "ENTITLEMENT", "id": "domain-users", "name": "Domain Users"}]},
+    ]
+    sod_policies = [{
+        "id": "payroll-sod", "name": "Payroll approval versus HR administration", "state": "ENFORCED",
+        "type": "CONFLICTING_ACCESS_BASED", "conflictingAccessCriteria": {
+            "leftCriteria": {"name": "Payroll approval", "criteriaList": [granted["payroll-approver"]]},
+            "rightCriteria": {"name": "HR administration", "criteriaList": [granted["hr-portal-admin"]]}}}]
+    workflows = [
+        {"id": "hr-aggregation-alert", "name": "Alert when the HR aggregation fails", "enabled": True,
+         "trigger": {"type": "EVENT", "attributes": {
+             "id": "idn:source-account-aggregation-completed",
+             "filter.$": "$[?(@.source.name == 'HR System' && @.status == 'Error')]"}},
+         "definition": {"start": "Send email", "steps": {
+             "Send email": {"actionId": "sp:send-email", "attributes": {"subject": "HR aggregation failed"},
+                            "nextStep": "End", "type": "action"},
+             "End": {"type": "success"}}}},
+        {"id": "welcome", "name": "Welcome new joiners", "enabled": True,
+         "trigger": {"type": "EVENT", "attributes": {"id": "idn:identity-created"}},
+         "definition": {"start": "Send email", "steps": {
+             "Send email": {"actionId": "sp:send-email", "attributes": {"subject": "Welcome"},
+                            "type": "action"}}}},
+    ]
+    rules = [
+        {"id": "hr-build-map", "name": "HR System Build Map", "type": "BuildMap", "sourceCode": {
+            "version": "1.0", "script": "Map map = DelimitedFileConnector.defaultBuildMap(cols, record);\n"
+                                        "return map;"}},
+        {"id": "ad-before-create", "name": "AD Before Create", "type": "ConnectorBeforeCreate",
+         "sourceCode": {
+            "version": "1.0", "script": 'Link hr = identity.getLink("HR System");\n'
+                                        'return hr.getAttribute("employeeId");'}},
+    ]
+    password_policies = [{"id": "default-password", "name": "Default policy", "minLength": 12,
+                          "maxLength": 64, "sourceIds": ["Active Directory", "HR System"]}]
 
     def leaf(attribute, value, kind="IDENTITY", source=None):
         key = {"type": kind, "property": f"attribute.{attribute}", **({"sourceId": source} if source else {})}
@@ -466,7 +524,9 @@ def sample_criteria():
         role("Finance Analyst", {"operation": "AND", "children": [
             leaf("department", "Finance"), leaf("cloudLifecycleState", "active")]}),
         role("HR Partner", {"operation": "OR", "children": [
-            leaf("department", "HR"), leaf("jobCode", "HRBP", "ACCOUNT", "HR System")]}),
+            leaf("department", "HR"), leaf("jobCode", "HRBP", "ACCOUNT", "HR System")]},
+             accessProfiles=[{"type": "ACCESS_PROFILE", "id": "hr-administration",
+                              "name": "HR Portal - Administration"}]),
         role("Remote Access", leaf("location", "Remote")),
         role("Sales Legacy", leaf("department", "Sales"), enabled=False),
         role("Regional Access", None, dimensional=True, dimensions=[
@@ -476,14 +536,32 @@ def sample_criteria():
     segments = [{"id": "Finance applications", "name": "Finance applications", "active": True,
                  "visibilityCriteria": {"expression": {"operator": "EQUALS", "attribute": "department",
                                                        "value": {"type": "STRING", "value": "Finance"}}}}]
+    policies: dict[str, list[dict]] = {}
+    for policy in sample_policies():
+        policies.setdefault(policy["source"], []).append({k: v for k, v in policy.items() if k != "source"})
+    schema = ["employeeId", "givenName", "surname", "mail", "department", "managerId", "hireDate", "status",
+              "jobCode", "location"]
     sources = [
-        {"id": "Active Directory", "name": "Active Directory", "correlationConfig": {
-            "attributeAssignments": [{"property": "uid", "value": "employeeID", "operation": "EQ"}]}},
-        {"id": "HR System", "name": "HR System", "correlationConfig": {
-            "attributeAssignments": [{"property": "uid", "value": "employeeId", "operation": "EQ"}]},
-         "managerCorrelationMapping": {"accountAttributeName": "managerId", "identityAttributeName": "uid"}},
+        {"id": "Active Directory", "name": "Active Directory", "connectorName": "Active Directory",
+         "features": ["PROVISIONING", "ENABLE", "PASSWORD", "SYNC_PROVISIONING"],
+         "correlationConfig": {
+             "attributeAssignments": [{"property": "uid", "value": "employeeID", "operation": "EQ"}]},
+         "provisioningPolicies": policies.get("Active Directory", [])},
+        {"id": "HR System", "name": "HR System", "connectorName": "Delimited File", "authoritative": True,
+         "owner": {"type": "IDENTITY", "id": "hr-owner", "name": "Morgan Lee"},
+         "managementWorkgroup": {"type": "GOVERNANCE_GROUP", "id": "hr-operations", "name": "HR Operations"},
+         "features": ["NO_RANDOM_ACCESS", "DISCOVER_SCHEMA"], "deleteThreshold": 10,
+         "connectorAttributes": {"buildMapRule": "HR System Build Map"},
+         "schemas": [{"name": "account",
+                      "attributes": [{"name": name, "type": "STRING"} for name in schema]}],
+         "correlationConfig": {
+             "attributeAssignments": [{"property": "uid", "value": "employeeId", "operation": "EQ"}]},
+         "managerCorrelationMapping": {"accountAttributeName": "managerId", "identityAttributeName": "uid"},
+         "provisioningPolicies": []},
     ]
-    return Objects(roles, segments, sources)
+    return Objects(roles, segments, sources, access_profiles=access_profiles, sod_policies=sod_policies,
+                   workflows=workflows, rules=rules, password_policies=password_policies,
+                   entitlements=entitlements)
 
 
 def sample_profiles() -> tuple[list[dict], dict[str, dict]]:
@@ -752,8 +830,9 @@ def run(folder: str) -> list[str]:
         writer(path, profiles, transforms, origin="demo", policies=sample_policies(),
                states=sample_lifecycle())
         out.append(path)
+    states = sample_lifecycle().states
     plan = source_migration.analyse(
-        profiles,
+        [{**profile, "lifecycleStates": states.get(profile["id"], [])} for profile in profiles],
         transforms,
         Source("HR System"),
         Source("New HR", "", ["employeeId", "givenName", "surname", "hireDate", "department"]),

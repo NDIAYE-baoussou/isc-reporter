@@ -16,8 +16,9 @@ the [issues](https://github.com/NDIAYE-baoussou/isc-reporter/issues).
 - **Configuration history**: snapshots of the configuration, one JSON file per object, secrets
   redacted, that only change when the configuration does, to keep under git; reports run on them
   offline.
-- **Change impact**: source migration analysis with draft JSON and the role, segment and
-  correlation criteria it affects; attribute synchronization forecast; role enablement impact.
+- **Change impact**: source migration analysis, with every object that depends on the source and
+  what to do, even before the new source is chosen, and draft JSON; attribute synchronization
+  forecast; role enablement impact.
 - **Trust**: read-only by design, client secrets kept in the credential store of the computer (one
   environment per tenant), a demo of every command on fictional data, tests that need no tenant,
   continuous integration, automated releases to PyPI, a security policy, and the permissions of

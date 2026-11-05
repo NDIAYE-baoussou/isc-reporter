@@ -248,8 +248,8 @@ def test_reports_run_from_a_snapshot(tmp_path):
     assert len(states) == 7 and {row[0] for row in states} == {"Employees", "Contractors"}
     assert "Service" in {row[1] for row in book["Employees"].iter_rows(min_row=2, values_only=True)}
 
-    rule = folder / "connector-rules"
-    rule.mkdir()
+    rule = folder / "connector-rules"                     # the demo has some: one more, without code
+    rule.mkdir(exist_ok=True)
     (rule / "Build map.json").write_text(json.dumps({"id": "c", "name": "Build map", "type": "BuildMap",
                                                      "attributes": None, "sourceCode": {}}), encoding="utf-8")
     profiles, transforms, policies = transform_analysis.load_files([str(folder)])
