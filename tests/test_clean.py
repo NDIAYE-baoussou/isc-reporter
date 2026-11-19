@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from isc_reporter import clean, externals
-from test_externals import IDENTITIES, data, elsewhere, fake_isc
+from test_externals import IDENTITIES, ago, data, fake_isc
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "isc_reporter"
 TENANT = "https://tenant.api.identitynow.com"
@@ -74,7 +74,7 @@ def test_only_iscr_clean_calls_write_endpoints():
 
 def test_read_plan_refuses_what_it_cannot_trust(tmp_path):
     good = write_plan(tmp_path)
-    assert len(clean.read_plan(good, 7)["deletions"]) == 4
+    assert len(clean.read_plan(good, 7)["deletions"]) == 6
     later = datetime.now(timezone.utc) + timedelta(days=8)
     with pytest.raises(clean.UsageError, match="8 day"):
         clean.read_plan(good, 7, now=later)
@@ -96,25 +96,25 @@ def test_without_apply_nothing_is_deleted(tmp_path, monkeypatch):
     assert deletions(isc) == []
     assert not isc.non_employee.called("export_non_employee_records_v1_without_preload_content")
     rows = audit(tmp_path, "checked.csv")
-    assert {name: row["Result"] for name, row in rows.items()} == dict.fromkeys(["ann", "ivy", "jo", "kim"],
-                                                                                 clean.WOULD_DELETE)
+    assert {name: row["Result"] for name, row in rows.items()} == dict.fromkeys(
+        ["ann", "ben", "cara", "ivy", "jo", "kim"], clean.WOULD_DELETE)
 
 
 def test_apply_deletes_what_is_still_to_delete(tmp_path, monkeypatch):
     plan = write_plan(tmp_path)
-    jo = {**IDENTITIES["jo"], "accounts": [elsewhere("a" * 32, "AD", disabled=False)]}
-    changed = {**IDENTITIES, "jo": jo}
-    isc = tenant(identities=changed)                        # jo has an enabled account again since the plan
-    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "3", plan=plan) == 0
-    assert deletions(isc) == ["rec-ivy", "rec-ann", "acc-kim"]             # records, then delimited accounts
+    jo = {**IDENTITIES["jo"], "attributes": {**IDENTITIES["jo"]["attributes"], "endDate": ago(5)}}
+    isc = tenant(identities={**IDENTITIES, "jo": jo})       # jo's contract was extended since the plan
+    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "5", plan=plan) == 0
+    # Records, then delimited accounts, longest gone first; ben's enabled account elsewhere is no reason.
+    assert deletions(isc) == ["rec-ivy", "rec-ann", "rec-cara", "rec-ben", "acc-kim"]
     rows = audit(tmp_path, "deleted.csv")
     assert {name: row["Result"] for name, row in rows.items()} == {
-        "jo": clean.SKIPPED, "ann": clean.DELETED, "ivy": clean.DELETED, "kim": clean.DELETED}
-    assert "Enabled accounts elsewhere" in rows["jo"]["Detail"]
+        "jo": clean.SKIPPED, **dict.fromkeys(["ann", "ben", "cara", "ivy", "kim"], clean.DELETED)}
+    assert "Identity end date" in rows["jo"]["Detail"]
     assert rows["kim"]["Detail"].startswith("account delete task task-acc-kim")
     backup = tmp_path / "out" / "backup"
     saved = json.loads((backup / "before-deletion.json").read_text(encoding="utf-8"))
-    assert [item["plan"]["account"] for item in saved] == ["ivy", "kim", "ann"]   # longest gone first
+    assert [item["plan"]["account"] for item in saved] == ["ivy", "kim", "ann", "cara", "ben"]
     assert (backup / "non-employees_Contractors.csv").read_bytes().startswith(b"accountName")
     exports = isc.non_employee.called("export_non_employee_records_v1_without_preload_content")
     assert exports == [{"id": "e" * 32}]                                  # the non-employee source id
@@ -122,7 +122,7 @@ def test_apply_deletes_what_is_still_to_delete(tmp_path, monkeypatch):
 
 def test_confirmation_is_required(tmp_path, monkeypatch):
     isc = tenant()
-    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "2") == 2     # 4 to delete, not 2
+    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "2") == 2     # 6 to delete, not 2
     assert run(tmp_path, monkeypatch, isc, "--apply") == 2                        # no terminal to type it in
     assert deletions(isc) == []
     clean.confirm(4, TENANT, None, ask=lambda prompt: " Delete 4 ", interactive=True)
@@ -133,10 +133,10 @@ def test_confirmation_is_required(tmp_path, monkeypatch):
 def test_safeguards(tmp_path, monkeypatch):
     isc = tenant()
     other = write_plan(tmp_path, tenant="https://other.api.identitynow.com")
-    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "4", plan=other) == 2
-    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "4", "--max", "3") == 2
+    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "6", plan=other) == 2
+    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "6", "--max", "5") == 2
     failing = tenant(export=lambda id: Download(403, b'{"message": "forbidden"}'))
-    assert run(tmp_path, monkeypatch, failing, "--apply", "--confirm", "4") == 2     # no backup, no deletion
+    assert run(tmp_path, monkeypatch, failing, "--apply", "--confirm", "6") == 2     # no backup, no deletion
     assert deletions(isc) == [] and deletions(failing) == []
     with pytest.raises(SystemExit):
         clean.main(["externals", write_plan(tmp_path), "--log-dir", ""])            # --env is required
@@ -147,7 +147,7 @@ def test_a_permission_error_stops_the_run(tmp_path, monkeypatch):
         raise ApiError(403)
 
     isc = tenant(delete_record=refuse)
-    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "4") == 1
+    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "6") == 1
     assert deletions(isc) == ["rec-ivy"]                                    # stopped at the first refusal
     results = {name: row["Result"] for name, row in audit(tmp_path, "deleted.csv").items()}
     assert results == {"ivy": clean.FAILED}
@@ -161,9 +161,9 @@ def test_accounts_already_gone_and_failures(tmp_path, monkeypatch):
         raise ApiError(500)
 
     isc = tenant(delete_record=gone, delete_account=broken)
-    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "4") == 1
+    assert run(tmp_path, monkeypatch, isc, "--apply", "--confirm", "6") == 1
     results = {name: row["Result"] for name, row in audit(tmp_path, "deleted.csv").items()}
-    assert results == {"ann": clean.NOT_FOUND, "ivy": clean.NOT_FOUND, "jo": clean.FAILED,
+    assert results == {**dict.fromkeys(["ann", "ben", "cara", "ivy"], clean.NOT_FOUND), "jo": clean.FAILED,
                        "kim": clean.FAILED}
 
 

@@ -728,8 +728,10 @@ def sample_leavers(rng: random.Random, people: list[dict], today):
 
 def sample_externals(rng: random.Random, people: list[dict], today):
     """The fictional contractors: some on a non-employee source, some interns on a delimited file
-    (dd/MM/yyyy end dates). Their contracts ended at various dates; a few still have an enabled account
-    elsewhere, own an access profile, manage people or are still active."""
+    (dd/MM/yyyy end dates). Their contracts ended at various dates. Among those that ended long ago, some
+    leave something behind (an enabled account elsewhere, an access profile, people they manage, an
+    active lifecycle state), and some cannot be deleted (a contract extended on the identity, an
+    identity of another profile, no non-employee record, an unreadable date)."""
     from isc_reporter.externals import DELIMITED, NON_EMPLOYEE, ExternalData, Settings, SourceInfo
 
     def states(name):
@@ -746,24 +748,30 @@ def sample_externals(rng: random.Random, people: list[dict], today):
     for n, person in enumerate(externals):
         source = interns if n % 4 == 0 else contractors
         days = rng.choice([-90, -10, 12, 40, 75, 120, 180, 260, 400, 650])
-        if n % 7 == 3 or n % 9 == 2 or n % 11 == 4 or n % 17 == 6:
-            days = 200                                  # left long ago, but something is left behind
+        if n % 7 == 3 or n % 9 == 2 or n % 10 == 7 or n % 11 == 4 or n % 16 == 13 or n % 17 == 6 or n == 21:
+            days = 200                                  # left long ago, with something to look at
         end = today - timedelta(days=days)
         login = person["name"].replace(".", "")
         account = {"id": _id(rng), "name": login, "nativeIdentity": login, "identityId": person["id"],
                    "identity": {"id": person["id"], "name": person["name"]}, "attributes": {}}
         if source is interns:
             account["attributes"]["endDate"] = "TBD" if n == 12 else end.strftime("%d/%m/%Y")
+        elif n == 21:                                   # no non-employee record
+            account["attributes"]["endDate"] = end.isoformat()
         else:
             records[source.id].append({"id": _id(rng), "accountName": login,
                                        "endDate": None if n % 13 == 5 else end.isoformat() + "T00:00:00Z"})
         accounts[source.id].append(account)
-        others = [{"id": _id(rng), "source": {"id": a["source"]["name"], "name": a["source"]["name"]},
+        others = [{"id": _id(rng), "accountId": login, "privileged": n % 14 == 3,
+                   "source": {"id": a["source"]["name"], "name": a["source"]["name"]},
                    "disabled": not (days < 0 or n % 7 == 3)} for a in person["accounts"]]
-        state = "active" if days < 0 or n % 9 == 2 else "inactive"
+        state = "active" if days < 0 or n % 9 == 2 or n % 16 == 13 else "inactive"
+        identity_end = today + timedelta(days=30) if n % 9 == 2 else end          # contract extended
+        profile = "Employees" if n % 10 == 7 and source is contractors else source.name
         identities[person["id"]] = {
-            **person, "identityProfile": {"id": source.name, "name": source.name}, "accounts": others,
-            "attributes": {**person["attributes"], "cloudLifecycleState": state, "endDate": end.isoformat()},
+            **person, "identityProfile": {"id": profile, "name": profile}, "accounts": others,
+            "attributes": {**person["attributes"], "cloudLifecycleState": state,
+                           "endDate": identity_end.isoformat()},
             "owns": {"accessProfiles": [{"id": "ap"}]} if n % 11 == 4 else {}}
         if n % 17 == 6:
             managed[person["id"]] = 2

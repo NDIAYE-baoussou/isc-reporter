@@ -28,8 +28,9 @@ def record(name, end):
     return {"id": f"rec-{name}", "accountName": name, "endDate": end, "sourceId": NELM}
 
 
-def elsewhere(source, name, disabled):
-    return {"id": f"other-{name}-{source}", "source": {"id": source, "name": name}, "disabled": disabled}
+def elsewhere(source, name, disabled, owner=""):
+    return {"id": f"other-{name}-{source}", "accountId": f"{owner}-{name}",
+            "source": {"id": source, "name": name}, "disabled": disabled}
 
 
 def person(name, profile, state, end, accounts=(), owns=None, manager=False):
@@ -59,8 +60,8 @@ RECORDS = {NE: [record("ann", "2020-03-31T00:00:00Z"), record("ben", "2020-05-01
                 record("eli", ago(20) + "T00:00:00Z"), record("fay", "2099-01-31T00:00:00Z"),
                 record("gus", None), record("ivy", "2020-02-01T00:00:00Z")]}
 IDENTITIES = {doc["id"]: doc for doc in [
-    person("ann", "contractors", "inactive", "2020-03-31", [elsewhere(AD, "AD", disabled=True)]),
-    person("ben", "contractors", "inactive", "2020-05-01", [elsewhere(AD, "AD", disabled=False)]),
+    person("ann", "contractors", "inactive", "2020-03-31", [elsewhere(AD, "AD", True, owner="ann")]),
+    person("ben", "contractors", "inactive", "2020-05-01", [elsewhere(AD, "AD", False, owner="ben")]),
     person("cara", "contractors", "inactive", "2020-04-15", owns={"roles": [{"id": "r1"}, {"id": "r2"}]},
            manager=True),
     person("dev", "contractors", "active", ago(10)),
@@ -111,14 +112,17 @@ def test_each_account_gets_a_status_and_its_reasons():
     result = externals.analyse(data())
     rows = rows_by_account(result)
     status = {name: row.status for name, row in rows.items()}
-    assert status == {"ann": TO_DELETE, "ivy": TO_DELETE, "jo": TO_DELETE, "kim": TO_DELETE,
-                      "ben": TO_REVIEW, "cara": TO_REVIEW, "dev": TO_REVIEW, "hal": TO_REVIEW,
+    # The end dates decide: what deleting leaves behind (ben, cara) is a warning.
+    assert status == {"ann": TO_DELETE, "ben": TO_DELETE, "cara": TO_DELETE, "ivy": TO_DELETE,
+                      "jo": TO_DELETE, "kim": TO_DELETE, "dev": TO_REVIEW, "hal": TO_REVIEW,
                       "lou": TO_REVIEW, "max": TO_REVIEW, "ned": TO_REVIEW, "eli": RECENT}
     labels = {name: {label for label, _ in row.reasons} for name, row in rows.items()}
-    assert labels["ben"] == {externals.OTHER_ENABLED}
-    assert labels["cara"] == {externals.OWNS, externals.MANAGER}
-    assert labels["dev"] == {externals.NOT_LEAVER, externals.IDENTITY_DATE}
+    warnings = {name: {label for label, _ in row.warnings} for name, row in rows.items()}
+    assert warnings["ben"] == {externals.OTHER_ENABLED} and labels["ben"] == set()
+    assert warnings["cara"] == {externals.OWNS, externals.MANAGER} and labels["cara"] == set()
+    assert labels["dev"] == {externals.IDENTITY_DATE} and warnings["dev"] == {externals.NOT_LEAVER}
     assert labels["hal"] == {externals.NO_RECORD}                  # ended per its account attribute
+    assert "none of the 8 non-employee record(s)" in rows["hal"].reasons[0][1]
     assert labels["lou"] == {externals.UNREADABLE}
     assert labels["max"] == {externals.NOT_AUTHORITATIVE}
     assert externals.UNSUPPORTED in labels["ned"]
@@ -128,12 +132,39 @@ def test_each_account_gets_a_status_and_its_reasons():
     assert rows["eli"].eligible == TODAY - timedelta(days=20) + timedelta(days=90)
     counts = result.counts
     assert (counts[NE]["Accounts"], counts[NE]["No end date"], counts[NE]["End date to come"]) == (9, 1, 1)
-    assert [row.status for row in result.rows][:7] == [TO_REVIEW] * 7          # to review first
+    assert [row.status for row in result.rows][:5] == [TO_REVIEW] * 5          # to review first
     shown = externals.display(rows["cara"])
     assert shown["Owns"] == 2 and shown["Manages"] == 3
-    assert "2 role(s): reassign them first" in shown["Reasons"]
+    assert "2 role(s): reassign them" in shown["Warnings"] and shown["Reasons"] == ""
     assert externals.display(rows["jo"])["Action"].startswith("Remove the row from the file")
     assert "and the identity" in externals.display(rows["ann"])["Action"]
+    assert externals.display(rows["ben"])["Action"].endswith("disable the 1 account(s) left uncorrelated")
+    left = externals.uncorrelated_rows(result)
+    assert [(r["Identity"], r["Source"], r["Account"], r["Enabled"]) for r in left] == [
+        ("ben", "AD", "ben-AD", "yes"), ("ann", "AD", "ann-AD", "no")]          # enabled first
+
+
+def test_strict_keeps_for_review_what_would_be_left_behind():
+    result = externals.analyse(data(settings=externals.Settings(90, strict=True)))
+    rows = rows_by_account(result)
+    assert {name for name, row in rows.items() if row.status == TO_DELETE} == {"ann", "ivy", "jo", "kim"}
+    assert {label for label, _ in rows["ben"].reasons} == {externals.OTHER_ENABLED}
+    assert {label for label, _ in rows["cara"].reasons} == {externals.OWNS, externals.MANAGER}
+    assert {label for label, _ in rows["dev"].reasons} == {externals.NOT_LEAVER, externals.IDENTITY_DATE}
+    assert not any(row.warnings for row in result.rows)
+    assert externals.Settings.from_json(externals.Settings(90, strict=True).to_json()).strict
+
+
+def test_records_match_by_account_name_or_id_never_by_guess():
+    records = [{"id": "r-1", "accountName": "ann"}, {"id": "r-2", "accountName": "bob"}]
+    index = externals.record_index(records)
+    match = externals.match_record
+    assert match({"nativeIdentity": "ANN"}, index)[0]["id"] == "r-1"                 # case does not matter
+    assert match({"nativeIdentity": "r-2", "name": "Bob B."}, index)[0]["id"] == "r-2"  # the record id
+    assert match({"nativeIdentity": "x", "attributes": {"accountName": "bob"}}, index)[0]["id"] == "r-2"
+    assert match({"nativeIdentity": "nobody"}, index) == (None, "")
+    record, why = match({"nativeIdentity": "ann", "name": "bob"}, index)            # two records
+    assert record is None and why == "2 non-employee records match this account"
 
 
 def test_settings_change_the_checks():
@@ -155,10 +186,13 @@ def test_plan_lists_only_the_accounts_to_delete(tmp_path):
     assert plan["settings"]["days"] == 90
     assert plan["settings"]["sources"] == ["Contractors", "Interns", "Badges"]
     entries = {e["account"]: e for e in plan["deletions"]}
-    assert set(entries) == {"ann", "ivy", "jo", "kim"}
+    assert set(entries) == {"ann", "ben", "cara", "ivy", "jo", "kim"}
     assert entries["ann"] == {"source": "Contractors", "sourceId": NE, "kind": externals.NON_EMPLOYEE,
                               "accountId": "acc-ann", "account": "ann", "recordId": "rec-ann",
-                              "identityId": "ann", "identity": "ann", "endDate": "2020-03-31"}
+                              "identityId": "ann", "identity": "ann", "endDate": "2020-03-31",
+                              "warnings": []}
+    assert entries["ben"]["warnings"] == [
+        "Enabled accounts elsewhere: 1 on AD: they stay, uncorrelated, with their access"]
     assert entries["jo"]["recordId"] == "" and entries["jo"]["kind"] == externals.DELIMITED
     assert externals.Settings.from_json(plan["settings"]) == externals.Settings(90)
 
@@ -170,13 +204,17 @@ def test_reports(tmp_path):
     externals.write_pdf(pdf, result)
     externals.write_csv(csv, result)
     book = load_workbook(xlsx)
-    assert book.sheetnames == ["Dashboard", TO_DELETE, TO_REVIEW, RECENT, "By source", "Settings",
-                               "Chart data", "Read me"]
+    assert book.sheetnames == ["Dashboard", TO_DELETE, externals.UNCORRELATED, TO_REVIEW, RECENT, "By source",
+                               "Settings", "Chart data", "Read me"]
     to_delete = [r for r in book[TO_DELETE].iter_rows(min_row=2, values_only=True)]
-    assert {r[1] for r in to_delete} == {"ann", "ivy", "jo", "kim"}
+    assert {r[1] for r in to_delete} == {"ann", "ben", "cara", "ivy", "jo", "kim"}
+    assert len(list(book[externals.UNCORRELATED].iter_rows(min_row=2, values_only=True))) == 2
     by_source = {r[0]: r for r in book["By source"].iter_rows(min_row=2, values_only=True)}
     # type, accounts, no end date, end date to come, left recently, to review, to delete
-    assert by_source["Contractors"][1:8] == (externals.NON_EMPLOYEE, 9, 1, 1, 1, 4, 2)
+    assert by_source["Contractors"][1:8] == (externals.NON_EMPLOYEE, 9, 1, 1, 1, 2, 4)
+    settings = {r[0]: r[1] for r in book["Settings"].iter_rows(min_row=2, values_only=True)}
+    assert settings["Non-employee records of Contractors"] == "8"
+    assert settings["What is left behind"] == "warnings"
     assert open(pdf, "rb").read(4) == b"%PDF"
     import csv as csv_module
 
@@ -232,17 +270,25 @@ def test_fetch_reads_sources_records_identities_and_managers():
     assert "eli" not in found.identities and "ann" in found.identities      # only those ended 90 days ago
     assert set(found.lifecycle) == {"contractors", "interns"}
     assert isc.non_employee.called("list_non_employee_records_v1")[0]["filters"] == f'sourceId eq "{NELM}"'
+    assert "1 of the 9 account(s) of 'Contractors' match none of its 8 non-employee record(s)" in " ".join(
+        found.notes)                                                        # hal
     result = externals.analyse(found)
     to_delete = {externals.display(r)["Account"] for r in result.rows if r.status == TO_DELETE}
-    assert to_delete == {"ann", "ivy", "jo", "kim"}
+    assert to_delete == {"ann", "ben", "cara", "ivy", "jo", "kim"}
 
 
 def test_fetch_without_the_records():
     found = externals.fetch(fake_isc(records=False), ["Contractors"], externals.Settings(90), TODAY)
-    assert any("records of 'Contractors' not read" in note for note in found.notes)
-    rows = rows_by_account(externals.analyse(found))
+    notes = " ".join(found.notes)
+    assert "records of 'Contractors' not read" in notes and "idn:nelm:read" in notes
+    assert NE not in found.records
+    result = externals.analyse(found)
+    rows = rows_by_account(result)
+    # Only hal has an endDate of its own: the others have no end date without their record.
+    assert set(rows) == {"hal"} and result.counts[NE]["No end date"] == 8
     assert rows["hal"].status == TO_REVIEW
-    assert {label for label, _ in rows["hal"].reasons} == {externals.NO_RECORD}
+    assert rows["hal"].reasons == [(externals.NO_RECORD, "the non-employee records of this source could not "
+                                                         "be read: see Settings")]
 
 
 def test_missing_account_attribute_is_reported():
@@ -257,9 +303,15 @@ def test_cli_writes_the_report_and_the_plan(tmp_path, monkeypatch):
     assert cli.main(["externals", "--source", "Contractors", "--source", "Interns", "--days", "90",
                      "--format", "xlsx", "csv", "-o", str(out), "--log-dir", ""]) == 0
     plan = json.load(open(str(out) + ".plan.json", encoding="utf-8"))
-    assert {e["account"] for e in plan["deletions"]} == {"ann", "ivy", "jo", "kim"}
+    assert {e["account"] for e in plan["deletions"]} == {"ann", "ben", "cara", "ivy", "jo", "kim"}
     assert (tmp_path / "externals.xlsx").exists() and (tmp_path / "externals.csv").exists()
     assert not (tmp_path / "externals.pdf").exists()
+    strict = tmp_path / "strict"
+    assert cli.main(["externals", "--source", "Contractors", "--source", "Interns", "--days", "90",
+                     "--strict", "--format", "csv", "-o", str(strict), "--log-dir", ""]) == 0
+    plan = json.load(open(str(strict) + ".plan.json", encoding="utf-8"))
+    assert {e["account"] for e in plan["deletions"]} == {"ann", "ivy", "jo", "kim"}
+    assert plan["settings"]["strict"] is True
 
 
 def test_cli_without_anything_to_delete_writes_no_plan(tmp_path, monkeypatch):

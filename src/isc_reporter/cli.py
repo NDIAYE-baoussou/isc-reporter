@@ -400,7 +400,7 @@ def _externals(args) -> int:
     if args.days < 0:
         raise UsageError("--days must be 0 or more")
     settings = externals.Settings(args.days, args.account_attribute or "", args.identity_attribute,
-                                  args.date_format or "", args.states or [])
+                                  args.date_format or "", args.states or [], args.strict)
     isc = _connect(args)
     data = externals.fetch(isc, args.source, settings)
     for note in data.notes:
@@ -735,10 +735,10 @@ def build_parser() -> argparse.ArgumentParser:
     output(p)
 
     p = command("externals", _externals, "Externals who left: accounts of non-employee and delimited file "
-                                         "sources whose end date is at least --days past, checked against "
-                                         "their identity (end date, lifecycle state, other accounts, owned "
-                                         "objects, people managed), and a plan of those to delete with "
-                                         "iscr-clean. Changes nothing.")
+                                         "sources whose end date, and their identity's, is at least --days "
+                                         "past, with what deleting them leaves behind (accounts left "
+                                         "uncorrelated, owned objects, people managed), and a plan of those "
+                                         "to delete with iscr-clean. Changes nothing.")
     p.add_argument("--source", action="append", required=True, metavar="NAME",
                    help="a non-employee or delimited file source (repeatable)")
     p.add_argument("--days", type=int, required=True,
@@ -755,6 +755,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--states", nargs="+", metavar="STATE",
                    help="leaver lifecycle states (technical names); default: the states configured as "
                         "inactive")
+    p.add_argument("--strict", action="store_true",
+                   help="keep for review the accounts whose deletion leaves something behind: enabled "
+                        "accounts on other sources (left uncorrelated), owned objects, people managed, a "
+                        "lifecycle state that is not a leaver state (by default they are warnings)")
     p.add_argument("--title", help="report title")
     p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
     formats(p)

@@ -51,10 +51,13 @@ def test_demo_externals_shows_every_status_and_reason():
     result = externals.analyse(data)
     assert {row.status for row in result.rows} == set(externals.STATUSES)
     reasons = {label for row in result.rows for label, _ in row.reasons}
-    assert {externals.OTHER_ENABLED, externals.OWNS, externals.MANAGER, externals.NOT_LEAVER,
-            externals.UNREADABLE} <= reasons
+    assert reasons == {externals.IDENTITY_DATE, externals.NOT_AUTHORITATIVE, externals.NO_RECORD,
+                       externals.UNREADABLE}
+    deleted = [row for row in result.rows if row.status == externals.TO_DELETE]
+    assert {label for row in deleted for label, _ in row.warnings} == set(externals.LEFT_BEHIND)
     kinds = {row.source.kind for row in result.rows if row.status == externals.TO_DELETE}
     assert kinds == {externals.NON_EMPLOYEE, externals.DELIMITED}
+    assert any(r["Enabled"] == "yes" for r in externals.uncorrelated_rows(result))
     assert any("Uncorrelated" in note for row in result.rows for note in row.notes)
     counts = [result.counts[s.id] for s in data.sources]
     assert sum(c["No end date"] for c in counts) and sum(c["End date to come"] for c in counts)

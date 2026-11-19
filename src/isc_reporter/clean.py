@@ -3,7 +3,7 @@
 ``iscr`` only reads. ``iscr-clean`` deletes, and only what a reviewed plan lists:
 
 1. ``iscr externals`` writes the plan: the accounts of non-employee and delimited file sources whose
-   end date is past and that nothing else depends on.
+   end date, and their identity's, is past, on the source the identity profile is built from.
 2. ``iscr-clean externals PLAN --env NAME`` checks every account of the plan again against the
    tenant, with the plan's settings, and says what it would delete. Nothing is changed.
 3. With ``--apply``, after a typed confirmation (or ``--confirm COUNT``), it saves a backup (the
@@ -240,7 +240,7 @@ class Audit:
 def _externals(args) -> int:
     from isc_reporter.api import error_message
     from isc_reporter.client import connect
-    from isc_reporter.externals import DELIMITED
+    from isc_reporter.externals import DELIMITED, other_accounts
 
     plan = read_plan(args.plan, args.max_age)
     entries = plan["deletions"]
@@ -281,7 +281,7 @@ def _externals(args) -> int:
     for entry, why in skipped:
         audit.write(entry, SKIPPED, why)
     results: dict[str, int] = {}
-    failures, files = 0, False
+    failures, files, left = 0, False, 0
     try:
         for number, (entry, row) in enumerate(keep, 1):
             try:
@@ -295,6 +295,8 @@ def _externals(args) -> int:
             audit.write(entry, result, detail)
             results[result] = results.get(result, 0) + 1
             files |= result == DELETED and row.source.kind == DELIMITED
+            if result == DELETED and row.identity:
+                left += sum(not a.get("disabled") for a in other_accounts(row.identity, row.source))
             failures = failures + 1 if result == FAILED else 0
             if result == FAILED:
                 log.warning("Not deleted: %s / %s: %s", entry["source"], entry.get("account"), detail)
@@ -307,6 +309,9 @@ def _externals(args) -> int:
         audit.close()
     log.info("%d deleted, %d not found, %d failed, %d skipped; audit: %s", results.get(DELETED, 0),
              results.get(NOT_FOUND, 0), results.get(FAILED, 0), len(skipped), audit.path)
+    if left:
+        log.warning("%d enabled account(s) on other sources are now uncorrelated, with their access: the "
+                    "'Left uncorrelated' sheet of the report lists them, to disable or delete.", left)
     if files:
         log.warning("Delimited file sources: remove the deleted rows from the file before the next "
                     "aggregation, or the accounts and identities come back.")

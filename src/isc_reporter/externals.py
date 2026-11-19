@@ -1,11 +1,14 @@
 """Externals who left: accounts of a non-employee or delimited file source whose end date is at least
 some days past, checked against their identity before anyone deletes them.
 
-Deleting the account of an authoritative source deletes its identity too, and the identity's
-accounts on other sources then become uncorrelated, with their access. So an account is only *to
-delete* when nothing would be left behind: its identity left too (end date and lifecycle state), has
-no enabled account elsewhere, owns nothing and manages no one. Otherwise it is *to review*, with the
-reasons.
+An account is *to delete* when its end date and its identity's end date are both that old, the
+source is the one the identity profile is built from (deleting the account then deletes the
+identity), and the deletion can be done (a readable date, a non-employee record, a supported source
+type). Otherwise it is *to review*, with the reasons.
+
+What the deletion leaves behind is shown as warnings: the identity's accounts on other sources,
+which become uncorrelated with their access, the objects it owns, the identities it manages, a
+lifecycle state that is not a leaver state. With ``strict`` they are reasons to review instead.
 
 This module only reads. It writes a report and a plan, the accounts to delete; the separate
 ``iscr-clean`` command deletes them from a reviewed plan (see :mod:`isc_reporter.clean`).
@@ -29,22 +32,22 @@ log = logging.getLogger("isc_reporter")
 NON_EMPLOYEE, DELIMITED, OTHER = "Non-employee", "Delimited file", "Other"
 TO_DELETE, TO_REVIEW, RECENT = "To delete", "To review", "Left recently"
 STATUSES = (TO_REVIEW, TO_DELETE, RECENT)
-STATUS_FILLS = {TO_DELETE: "F8CBAD", TO_REVIEW: "FFE0B2", RECENT: "DDEBF7"}
 STATUS_COLOURS = {TO_DELETE: dashboard.RED, TO_REVIEW: dashboard.AMBER, RECENT: dashboard.BLUE}
 
-# Why an account that ended is to review rather than to delete.
-OTHER_ENABLED = "Enabled accounts elsewhere"
-OWNS = "Owns objects"
-MANAGER = "Manages identities"
-NOT_LEAVER = "Not in a leaver state"
+# Why an account that ended cannot be deleted: it is to review.
 IDENTITY_DATE = "Identity end date"
 NOT_AUTHORITATIVE = "Not authoritative"
 NO_IDENTITY = "Identity not found"
 UNREADABLE = "End date not readable"
 NO_RECORD = "No non-employee record"
 UNSUPPORTED = "Source type"
-REASONS = (OTHER_ENABLED, OWNS, MANAGER, NOT_LEAVER, IDENTITY_DATE, NOT_AUTHORITATIVE, NO_IDENTITY,
-           UNREADABLE, NO_RECORD, UNSUPPORTED)
+# What deleting it leaves behind: a warning, or a reason to review in strict mode.
+OTHER_ENABLED = "Enabled accounts elsewhere"
+OWNS = "Owns objects"
+MANAGER = "Manages identities"
+NOT_LEAVER = "Not in a leaver state"
+LEFT_BEHIND = (OTHER_ENABLED, OWNS, MANAGER, NOT_LEAVER)
+REASONS = (IDENTITY_DATE, NOT_AUTHORITATIVE, NO_IDENTITY, UNREADABLE, NO_RECORD, UNSUPPORTED) + LEFT_BEHIND
 
 DEFAULT_ATTRIBUTE = "endDate"
 INACTIVE = {"INACTIVE_SHORT_TERM", "INACTIVE_LONG_TERM"}
@@ -52,15 +55,16 @@ PLAN_FORMAT = "iscr-externals-plan/1"
 ID_CHUNK = 100
 OWNED = {"sources": "source(s)", "entitlements": "entitlement(s)", "accessProfiles": "access profile(s)",
          "roles": "role(s)", "apps": "application(s)", "governanceGroups": "governance group(s)"}
+UNCORRELATED = "Left uncorrelated"
 
 COLUMNS = ["Status", "Source", "Account", "Identity", "Display name", "Lifecycle state", "Account end date",
            "Identity end date", "Days since", "Other accounts", "Enabled elsewhere", "Owns", "Manages",
-           "Reasons", "Notes", "Action"]
+           "Reasons", "Warnings", "Notes", "Action"]
 DELETE_COLUMNS = ["Source", "Account", "Identity", "Display name", "Lifecycle state", "Account end date",
-                  "Identity end date", "Days since", "Other accounts", "Notes", "Action"]
+                  "Identity end date", "Days since", "Enabled elsewhere", "Warnings", "Notes", "Action"]
 REVIEW_COLUMNS = ["Source", "Account", "Identity", "Display name", "Lifecycle state", "Account end date",
                   "Identity end date", "Days since", "Enabled elsewhere", "Owns", "Manages", "Reasons",
-                  "Notes"]
+                  "Warnings", "Notes"]
 RECENT_COLUMNS = ["Source", "Account", "Identity", "Display name", "Account end date", "Days since",
                   "Action"]
 
@@ -155,17 +159,18 @@ class Settings:
     identity_attribute: str = DEFAULT_ATTRIBUTE   # "": not compared
     date_format: str = ""
     states: list[str] = field(default_factory=list)      # leaver states; default: the inactive ones
+    strict: bool = False                 # what the deletion leaves behind is a reason to review
 
     def to_json(self) -> dict:
         return {"days": self.days, "accountAttribute": self.account_attribute,
                 "identityAttribute": self.identity_attribute, "dateFormat": self.date_format,
-                "states": list(self.states)}
+                "states": list(self.states), "strict": self.strict}
 
     @classmethod
     def from_json(cls, data: dict) -> Settings:
         return cls(int(data["days"]), data.get("accountAttribute") or "",
                    data.get("identityAttribute") or "", data.get("dateFormat") or "",
-                   list(data.get("states") or []))
+                   list(data.get("states") or []), bool(data.get("strict")))
 
     def account_label(self, kind: str) -> str:
         if self.account_attribute:
@@ -177,7 +182,7 @@ class Settings:
 class ExternalData:
     sources: list[SourceInfo]
     accounts: dict[str, list[dict]]                     # source id -> accounts
-    records: dict[str, list[dict]]                      # source id -> non-employee records
+    records: dict[str, list[dict]]                      # source id -> non-employee records, when read
     identities: dict[str, dict]                         # identity id -> search document
     managed: dict[str, int]                             # identity id -> identities it manages
     lifecycle: dict[str, dict[str, dict]]               # identity profile id -> technical name -> state
@@ -197,27 +202,45 @@ def source_kind(source: dict, nelm_sources: dict[str, str]) -> str:
     return DELIMITED if "delimitedfile" in text else OTHER
 
 
-def account_ends(info: SourceInfo, accounts: list[dict], records: list[dict],
-                 settings: Settings) -> list[tuple[dict, dict | None, object, date | None, str]]:
-    """``(account, record, raw end date, end date, why it cannot be read)`` for each account."""
-    by_name: dict[str, dict] = {}
+def record_index(records: list[dict]) -> dict[str, list[dict]]:
+    """Non-employee records by their id and account name (lower case)."""
+    index: dict[str, list[dict]] = {}
     for record in records:
-        by_name.setdefault(str(record.get("accountName") or "").lower(), record)
+        for key in dict.fromkeys(str(k).lower() for k in (record.get("id"), record.get("accountName")) if k):
+            index.setdefault(key, []).append(record)
+    return index
+
+
+def match_record(account: dict, index: dict[str, list[dict]]) -> tuple[dict | None, str]:
+    """The non-employee record of *account*: the one whose account name (or id) is the account's native
+    identity, name, or ``accountName`` / ``id`` attribute. Several records is a mismatch, never a
+    guess."""
+    attributes = account.get("attributes") or {}
+    keys = {str(value).lower() for value in (account.get("nativeIdentity"), account.get("name"),
+                                             attributes.get("accountName"), attributes.get("id")) if value}
+    found = {str(r.get("id") or r.get("accountName")): r for key in keys for r in index.get(key, [])}
+    if len(found) == 1:
+        return next(iter(found.values())), ""
+    return None, (f"{len(found)} non-employee records match this account" if found else "")
+
+
+def account_ends(info: SourceInfo, accounts: list[dict], records: list[dict] | None, settings: Settings
+                 ) -> list[tuple[dict, dict | None, str, object, date | None, str]]:
+    """``(account, record, why no record matches, raw end date, end date, why it cannot be read)`` for
+    each account of the source."""
+    index = record_index(records or [])
     items = []
     for account in accounts:
-        record = None
-        if info.kind == NON_EMPLOYEE:
-            record = (by_name.get(str(account.get("nativeIdentity") or "").lower())
-                      or by_name.get(str(account.get("name") or "").lower()))
+        record, mismatch = match_record(account, index) if info.kind == NON_EMPLOYEE else (None, "")
         attributes = account.get("attributes") or {}
         if settings.account_attribute or info.kind != NON_EMPLOYEE:
             raw = attributes.get(settings.account_attribute or DEFAULT_ATTRIBUTE)
         else:
             raw = (record or {}).get("endDate") or attributes.get(DEFAULT_ATTRIBUTE)
-        items.append((account, record, raw))
-    order = day_order(raw for _, _, raw in items)
-    return [(account, record, raw, *parse_date(raw, settings.date_format, order))
-            for account, record, raw in items]
+        items.append((account, record, mismatch, raw))
+    order = day_order(raw for *_, raw in items)
+    return [(account, record, mismatch, raw, *parse_date(raw, settings.date_format, order))
+            for account, record, mismatch, raw in items]
 
 
 # -- reading -----------------------------------------------------------------------------
@@ -253,13 +276,16 @@ def fetch(isc, names: list[str], settings: Settings, today: date | None = None) 
         accounts[info.id] = [model_json(a) for a in list_all(isc.accounts.list_accounts_v1,
                                                              filters=f"sourceId eq {quote(info.id)}")]
         if info.kind == NON_EMPLOYEE:
-            records[info.id] = _records(isc, info, notes)
+            found = _records(isc, info, notes)
+            if found is not None:
+                records[info.id] = found
         log.info("%s (%s): %d account(s)%s", info.name, info.kind, len(accounts[info.id]),
                  f", {len(records[info.id])} non-employee record(s)" if info.id in records else "")
         notes += missing_attribute(info, accounts[info.id], settings)
+        notes += unmatched(info, accounts[info.id], records.get(info.id))
     data = ExternalData(sources, accounts, records, {}, {}, {}, settings, today, notes, isc.base_url)
-    ids = [account.get("identityId") for info in sources for account, _, _, end, _ in
-           account_ends(info, accounts[info.id], records.get(info.id, []), settings)
+    ids = [account.get("identityId") for info in sources for account, *_, end, _ in
+           account_ends(info, accounts[info.id], records.get(info.id), settings)
            if account.get("identityId") and end and (today - end).days >= max(settings.days, 1)]
     if ids:
         log.info("Reading the %d identit(ies) of the accounts that ended", len(set(ids)))
@@ -276,7 +302,8 @@ def fetch(isc, names: list[str], settings: Settings, today: date | None = None) 
     return data
 
 
-def _records(isc, info: SourceInfo, notes: list[str]) -> list[dict]:
+def _records(isc, info: SourceInfo, notes: list[str]) -> list[dict] | None:
+    """The non-employee records of the source, or None when they cannot be read."""
     from isc_reporter.api import error_message, list_all, model_json
 
     try:
@@ -286,8 +313,9 @@ def _records(isc, info: SourceInfo, notes: list[str]) -> list[dict]:
             if found:
                 return [model_json(r) for r in found]
     except Exception as exc:
-        notes.append(f"Non-employee records of '{info.name}' not read ({error_message(exc)}): its accounts "
-                     "cannot be deleted.")
+        notes.append(f"Non-employee records of '{info.name}' not read ({error_message(exc)}): none of its "
+                     "accounts can be deleted. The token needs idn:nelm:read.")
+        return None
     return []
 
 
@@ -300,6 +328,17 @@ def missing_attribute(info: SourceInfo, accounts: list[dict], settings: Settings
     seen = sorted({key for account in accounts[:200] for key in (account.get("attributes") or {})})
     return [f"No account of '{info.name}' has the attribute '{name}': give its end date attribute with "
             f"--account-attribute (attributes: {', '.join(seen[:30]) or 'none'})."]
+
+
+def unmatched(info: SourceInfo, accounts: list[dict], records: list[dict] | None) -> list[str]:
+    if info.kind != NON_EMPLOYEE or records is None or not accounts:
+        return []
+    index = record_index(records)
+    missing = sum(match_record(account, index)[0] is None for account in accounts)
+    if not missing:
+        return []
+    return [f"{missing} of the {len(accounts)} account(s) of '{info.name}' match none of its "
+            f"{len(records)} non-employee record(s) (by account name): they cannot be deleted."]
 
 
 # -- analysis ----------------------------------------------------------------------------
@@ -315,8 +354,10 @@ class Row:
     end: date | None
     end_text: str
     days: int | None
+    record_problem: str = ""
     identity_end: str = ""
-    reasons: list[tuple[str, str]] = field(default_factory=list)
+    reasons: list[tuple[str, str]] = field(default_factory=list)     # why it cannot be deleted
+    warnings: list[tuple[str, str]] = field(default_factory=list)    # what deleting it leaves behind
     notes: list[str] = field(default_factory=list)
     other: int = 0
     enabled_elsewhere: int = 0
@@ -341,8 +382,8 @@ def analyse(data: ExternalData) -> Result:
         count = counts.setdefault(info.id, Counter())
         accounts = data.accounts.get(info.id, [])
         count["Accounts"] = len(accounts)
-        for account, record, raw, end, problem in account_ends(info, accounts, data.records.get(info.id, []),
-                                                               settings):
+        for account, record, mismatch, raw, end, problem in account_ends(info, accounts,
+                                                                         data.records.get(info.id), settings):
             if problem:
                 row = Row(TO_REVIEW, info, account, record, None, None, str(raw), None,
                           reasons=[(UNREADABLE, problem)])
@@ -354,7 +395,8 @@ def analyse(data: ExternalData) -> Result:
                 continue
             else:
                 days = (today - end).days
-                row = Row(TO_DELETE, info, account, record, None, end, end.isoformat(), days)
+                row = Row(TO_DELETE, info, account, record, None, end, end.isoformat(), days,
+                          record_problem=mismatch)
                 if days < settings.days:
                     row.status, row.eligible = RECENT, end + timedelta(days=settings.days)
                     row.identity = data.identities.get(account.get("identityId") or "")
@@ -369,13 +411,20 @@ def analyse(data: ExternalData) -> Result:
 
 
 def _identity_checks(row: Row, data: ExternalData, identity_order: str) -> None:
-    """Fill the reasons (and notes) that make an ended account *to review*."""
+    """Fill why the ended account cannot be deleted (reasons), and what deleting it leaves behind
+    (warnings; reasons too in strict mode)."""
     settings, info, account = data.settings, row.source, row.account
+    left = row.reasons if settings.strict else row.warnings
     if info.kind == OTHER:
         row.reasons.append((UNSUPPORTED, "only accounts of delimited file and non-employee sources can be "
                                          "deleted by API"))
     elif info.kind == NON_EMPLOYEE and row.record is None:
-        row.reasons.append((NO_RECORD, "no non-employee record has this account name"))
+        if info.id not in data.records:
+            detail = "the non-employee records of this source could not be read: see Settings"
+        else:
+            detail = row.record_problem or (f"none of the {len(data.records[info.id])} non-employee "
+                                            "record(s) of this source has this account name")
+        row.reasons.append((NO_RECORD, detail))
     identity_id = account.get("identityId") or ""
     if not identity_id or account.get("uncorrelated"):
         row.notes.append("Uncorrelated account: no identity to delete")
@@ -403,35 +452,38 @@ def _identity_checks(row: Row, data: ExternalData, identity_order: str) -> None:
                                                f"{settings.days} day(s) ago"))
     state = str(attributes.get("cloudLifecycleState") or "")
     if not state:
-        row.notes.append("No lifecycle state: not checked")
+        row.notes.append("No lifecycle state")
     elif settings.states:
         if state not in settings.states:
-            row.reasons.append((NOT_LEAVER, f"'{state}' is not one of the leaver states given"))
+            left.append((NOT_LEAVER, f"'{state}' is not one of the leaver states given"))
     elif profile.get("id") in data.lifecycle:
         found = data.lifecycle[profile["id"]].get(state) or {}
         if str(found.get("identityState") or "").upper() not in INACTIVE:
-            row.reasons.append((NOT_LEAVER, f"'{state}' is not an inactive lifecycle state"))
+            left.append((NOT_LEAVER, f"'{state}' is not an inactive lifecycle state"))
     else:
         row.notes.append("Lifecycle states of the profile not read: state not checked")
-    others = [a for a in identity.get("accounts") or [] if (a.get("source") or {}).get("id") != info.id]
+    others = other_accounts(identity, info)
     enabled = [a for a in others if not a.get("disabled")]
     row.other, row.enabled_elsewhere = len(others), len(enabled)
     if enabled:
         names = ", ".join(dict.fromkeys((a.get("source") or {}).get("name", "") for a in enabled))
-        row.reasons.append((OTHER_ENABLED, f"{len(enabled)} on {names}: they would stay, uncorrelated, "
-                                           "with their access"))
-    elif others:
-        names = ", ".join(dict.fromkeys((a.get("source") or {}).get("name", "") for a in others))
-        row.notes.append(f"{len(others)} disabled account(s) on {names} will become uncorrelated")
+        left.append((OTHER_ENABLED, f"{len(enabled)} on {names}: they stay, uncorrelated, with their access"))
+    if len(others) > len(enabled):
+        disabled = [a for a in others if a.get("disabled")]
+        names = ", ".join(dict.fromkeys((a.get("source") or {}).get("name", "") for a in disabled))
+        row.notes.append(f"{len(disabled)} disabled account(s) on {names} will become uncorrelated")
     owned = owned_objects(identity)
     row.owns = sum(owned.values())
     if row.owns:
-        row.reasons.append((OWNS, ", ".join(f"{n} {OWNED.get(k, k)}" for k, n in owned.items())
-                           + ": reassign them first"))
+        left.append((OWNS, ", ".join(f"{n} {OWNED.get(k, k)}" for k, n in owned.items())
+                     + ": reassign them"))
     row.manages = data.managed.get(identity_id, 0)
     if row.manages:
-        row.reasons.append((MANAGER, f"manager of {row.manages} identit(ies): give them another manager "
-                                     "first"))
+        left.append((MANAGER, f"manager of {row.manages} identit(ies): give them another manager"))
+
+
+def other_accounts(identity: dict, info: SourceInfo) -> list[dict]:
+    return [a for a in identity.get("accounts") or [] if (a.get("source") or {}).get("id") != info.id]
 
 
 def owned_objects(identity: dict) -> dict[str, int]:
@@ -452,10 +504,18 @@ def action(row: Row) -> str:
     if row.status == TO_REVIEW:
         return "Fix the reasons, then run again"
     if row.source.kind == NON_EMPLOYEE:
-        return "Delete the non-employee record: ISC deletes the account" + (
+        text = "Delete the non-employee record: ISC deletes the account" + (
             " and the identity" if row.identity else "")
-    return ("Remove the row from the file, and delete the account: otherwise the next aggregation brings it "
-            "back")
+    else:
+        text = ("Remove the row from the file, and delete the account: otherwise the next aggregation "
+                "brings it back")
+    if row.enabled_elsewhere:
+        text += f". Then disable the {row.enabled_elsewhere} account(s) left uncorrelated"
+    return text
+
+
+def _lines(items: list[tuple[str, str]]) -> str:
+    return "\n".join(f"{label}: {detail}" for label, detail in items)
 
 
 def display(row: Row) -> dict:
@@ -468,9 +528,25 @@ def display(row: Row) -> dict:
             or "",
             "Account end date": row.end_text, "Identity end date": row.identity_end, "Days since": row.days,
             "Other accounts": row.other, "Enabled elsewhere": row.enabled_elsewhere, "Owns": row.owns,
-            "Manages": row.manages,
-            "Reasons": "\n".join(f"{label}: {detail}" for label, detail in row.reasons),
+            "Manages": row.manages, "Reasons": _lines(row.reasons), "Warnings": _lines(row.warnings),
             "Notes": "\n".join(row.notes), "Action": action(row)}
+
+
+def uncorrelated_rows(result: Result) -> list[dict]:
+    """The accounts on other sources of the identities to delete: they stay, uncorrelated."""
+    rows = []
+    for row in result.rows:
+        if row.status != TO_DELETE or not row.identity:
+            continue
+        for account in other_accounts(row.identity, row.source):
+            rows.append({"Identity": row.identity.get("name", ""),
+                         "Deleted with": f"{row.source.name}: {_account_name(row.account)}",
+                         "Source": (account.get("source") or {}).get("name", ""),
+                         "Account": account.get("accountId") or account.get("name") or "",
+                         "Enabled": "no" if account.get("disabled") else "yes",
+                         "Privileged": "yes" if account.get("privileged") else "no"})
+    return sorted(rows, key=lambda r: (r["Enabled"] != "yes", r["Privileged"] != "yes", r["Source"].lower(),
+                                       r["Identity"].lower()))
 
 
 # -- plan ---------------------------------------------------------------------------------
@@ -489,7 +565,8 @@ def plan(result: Result, created: datetime | None = None) -> dict:
                           "accountId": row.account.get("id", ""), "account": shown["Account"],
                           "recordId": (row.record or {}).get("id", ""),
                           "identityId": row.account.get("identityId") or "", "identity": shown["Identity"],
-                          "endDate": row.end.isoformat() if row.end else ""})
+                          "endDate": row.end.isoformat() if row.end else "",
+                          "warnings": [f"{label}: {detail}" for label, detail in row.warnings]})
     return {"format": PLAN_FORMAT, "tenant": data.origin, "created": created.isoformat(timespec="seconds"),
             "settings": {**data.settings.to_json(), "sources": [s.name for s in data.sources]},
             "note": "Accounts to delete with 'iscr-clean externals'. Remove the entries to keep; do not "
@@ -509,32 +586,36 @@ def write_plan(path: str, result: Result) -> str:
 
 def read_me(settings: Settings) -> list[tuple[str, str]]:
     days = settings.days
+    left = ("reasons to review (--strict)" if settings.strict else
+            "warnings: the account is still to delete (--strict makes them reasons to review)")
     return [
         ("What is this?", f"Accounts of non-employee and delimited file sources whose end date is at least "
                           f"{days} day(s) past, checked against their identity before deleting them. Nothing "
                           "was changed in the tenant."),
-        (TO_DELETE, "Nothing prevents deleting the account. On the source the identity profile is built "
-                    "from, deleting the account deletes the identity too. These accounts are in the plan "
-                    "(.plan.json)."),
-        (TO_REVIEW, "Deleting the account now would leave something behind, or cannot be done: see Reasons."),
+        (TO_DELETE, "The account and the identity both ended long enough ago, the identity profile is built "
+                    "from this source (deleting the account deletes the identity too) and the deletion can "
+                    "be done. These accounts are in the plan (.plan.json)."),
+        (TO_REVIEW, "The account cannot be deleted yet: see Reasons."),
         (RECENT, f"Ended less than {days} day(s) ago: kept for now. Action gives the first day it can go."),
-        (OTHER_ENABLED, "The identity still has enabled accounts on other sources. Once the identity is "
-                        "deleted they stay, uncorrelated, with their access: disable or delete them first "
-                        "(see the leavers report)."),
-        (OWNS, "The identity owns sources, roles, access profiles, entitlements, applications or "
-               "governance groups: reassign them first."),
-        (MANAGER, "Other identities have this identity as manager."),
-        (NOT_LEAVER, "The identity's lifecycle state is not a leaver state (by default, the states "
-                     "configured as inactive; --states gives others): the leaver process has not run."),
         (IDENTITY_DATE, "The identity's end date is less than the days given ago, or cannot be read: the "
                         "identity and the source disagree."),
         (NOT_AUTHORITATIVE, "The identity's profile is built from another source: deleting this account "
                             "would not delete the identity."),
-        (NO_RECORD, "The account of a non-employee source has no non-employee record with its name: it "
-                    "cannot be deleted through the non-employee API."),
+        (NO_RECORD, "The account of a non-employee source has no non-employee record with its name, or the "
+                    "records could not be read (see Settings): it cannot be deleted through the "
+                    "non-employee API."),
         (UNREADABLE, "The end date is not a date, or reads both as dd/MM/yyyy and MM/dd/yyyy: give "
                      "--date-format."),
         (UNSUPPORTED, "ISC deletes accounts by API only on delimited file and non-employee sources."),
+        ("What is left behind", f"What deleting the account leaves behind is listed as {left}."),
+        (OTHER_ENABLED, "The identity has enabled accounts on other sources. Once the identity is deleted "
+                        f"they stay, uncorrelated, with their access: the {UNCORRELATED} sheet lists them, "
+                        "to disable or delete."),
+        (OWNS, "The identity owns sources, roles, access profiles, entitlements, applications or "
+               "governance groups: reassign them, or they lose their owner."),
+        (MANAGER, "Other identities have this identity as manager: they lose their manager."),
+        (NOT_LEAVER, "The identity's lifecycle state is not a leaver state (by default, the states "
+                     "configured as inactive; --states gives others)."),
         ("Deleting", "Review the To delete sheet and remove from the plan the accounts to keep. Then run "
                      "'iscr-clean externals <plan> --env <name>' to check them again, and add --apply to "
                      "delete them. iscr-clean is a separate command: iscr itself never changes the tenant."),
@@ -566,7 +647,14 @@ def settings_rows(result: Result) -> list[dict]:
                                                                        "MM/dd/yyyy when the values tell"},
             {"Setting": "Leaver states",
              "Value": ", ".join(settings.states) or "the inactive lifecycle states"},
+            {"Setting": "What is left behind",
+             "Value": "reasons to review (--strict)" if settings.strict else "warnings"},
             {"Setting": "Date of the analysis", "Value": data.today.isoformat()}]
+    for info in data.sources:
+        if info.kind == NON_EMPLOYEE:
+            found = data.records.get(info.id)
+            rows.append({"Setting": f"Non-employee records of {info.name}",
+                         "Value": "not read" if found is None else str(len(found))})
     return rows + [{"Setting": "Note", "Value": note} for note in data.notes]
 
 
@@ -580,6 +668,9 @@ def build_dashboard(result: Result, title: str = "") -> dashboard.Dashboard:
     for count in result.counts.values():
         total.update(count)
     reasons = Counter(label for row in result.rows if row.status == TO_REVIEW for label, _ in row.reasons)
+    warnings = Counter(label for row in result.rows if row.status == TO_DELETE for label, _ in row.warnings)
+    uncorrelated = uncorrelated_rows(result)
+    enabled = sum(r["Enabled"] == "yes" for r in uncorrelated)
     kpis = [
         ("Accounts read", str(total["Accounts"]), dashboard.BLUE),
         (f"Ended at least {data.settings.days} day(s) ago", str(total[TO_DELETE] + total[TO_REVIEW]),
@@ -589,6 +680,7 @@ def build_dashboard(result: Result, title: str = "") -> dashboard.Dashboard:
         (RECENT, str(total[RECENT]), dashboard.BLUE),
         ("Without end date", str(total["No end date"]), dashboard.AMBER if total["No end date"] else
          dashboard.GREEN),
+        ("Enabled accounts left uncorrelated", str(enabled), dashboard.AMBER if enabled else dashboard.GREEN),
     ]
     charts = []
     labels = [s for s in STATUSES if total[s]]
@@ -599,8 +691,14 @@ def build_dashboard(result: Result, title: str = "") -> dashboard.Dashboard:
     if labels:
         charts.append(dashboard.Chart("Why accounts are to review", "bar", labels,
                                       [("Accounts", [reasons[r] for r in labels], dashboard.AMBER)]))
-    wide = {"Reasons", "Notes", "Action", "Value", "Display name", "Identity profiles"}
-    tables = [dashboard.Table(TO_DELETE, by_status[TO_DELETE], wide=wide),
+    labels = [w for w in LEFT_BEHIND if warnings[w]]
+    if labels:
+        charts.append(dashboard.Chart("What deleting leaves behind", "bar", labels,
+                                      [("Accounts to delete", [warnings[w] for w in labels], dashboard.RED)]))
+    wide = {"Reasons", "Warnings", "Notes", "Action", "Value", "Display name", "Identity profiles",
+            "Deleted with"}
+    tables = [dashboard.Table(TO_DELETE, by_status[TO_DELETE], wide=wide, red_positive={"Enabled elsewhere"}),
+              dashboard.Table(UNCORRELATED, uncorrelated, wide=wide, red_yes={"Enabled", "Privileged"}),
               dashboard.Table(TO_REVIEW, by_status[TO_REVIEW], wide=wide,
                               red_positive={"Enabled elsewhere", "Owns", "Manages"}),
               dashboard.Table(RECENT, by_status[RECENT], wide=wide),
@@ -611,10 +709,10 @@ def build_dashboard(result: Result, title: str = "") -> dashboard.Dashboard:
                 dashboard.Section(TO_REVIEW, by_status[TO_REVIEW],
                                   ["Source", "Account", "Identity", "Days since", "Reasons"]),
                 dashboard.Section(TO_DELETE, by_status[TO_DELETE],
-                                  ["Source", "Account", "Identity", "Account end date", "Days since"])]
+                                  ["Source", "Account", "Identity", "Days since", "Warnings"])]
     return dashboard.Dashboard(title or "Externals who left", dashboard.subtitle(data.origin), kpis, charts,
                                tables, sections, read_me(data.settings), colours=STATUS_COLOURS,
-                               wide_pdf={"Reasons", "Account", "Identity"})
+                               wide_pdf={"Reasons", "Warnings", "Account", "Identity"})
 
 
 def write_xlsx(path: str, result: Result, title: str = "") -> str:

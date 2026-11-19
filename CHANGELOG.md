@@ -5,6 +5,18 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `externals`: the end dates decide. An account is now *to delete* when its end date and its
+  identity's are both at least `--days` days past, the identity profile is built from the source
+  and the deletion can be done. What the deletion leaves behind (enabled accounts on other sources,
+  owned objects, people managed, a lifecycle state that is not a leaver state) is shown as warnings
+  instead of making the account *to review*; `--strict` brings back the former behaviour. The new
+  *Left uncorrelated* sheet lists the accounts on other sources of the identities to delete, and
+  `iscr-clean` says how many enabled ones it left uncorrelated.
+- `externals`: a non-employee record is also found by its id or by the account's `accountName`
+  attribute, and an account that matches several records is never guessed. The report says when
+  the records could not be read (the token needs `idn:nelm:read`), how many were read, and how many
+  accounts match none.
+
 ## [0.6.0] - 2026-11-19
 
 - `externals`: externals who left. It lists the accounts of non-employee and delimited file sources
