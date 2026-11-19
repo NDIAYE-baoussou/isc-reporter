@@ -5,6 +5,8 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-19
+
 - `externals`: externals who left. It lists the accounts of non-employee and delimited file sources
   whose end date is at least `--days` days past, and checks each against its identity: its end
   date, lifecycle state and identity profile, its accounts on other sources, the objects it owns
