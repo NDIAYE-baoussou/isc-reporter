@@ -5,6 +5,8 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-19
+
 - `externals`: the end dates decide. An account is now *to delete* when its end date and its
   identity's are both at least `--days` days past, the identity profile is built from the source
   and the deletion can be done. What the deletion leaves behind (enabled accounts on other sources,
