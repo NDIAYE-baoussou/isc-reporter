@@ -726,6 +726,57 @@ def sample_leavers(rng: random.Random, people: list[dict], today):
                       "endDate", 3, today, origin="demo")
 
 
+def sample_externals(rng: random.Random, people: list[dict], today):
+    """The fictional contractors: some on a non-employee source, some interns on a delimited file
+    (dd/MM/yyyy end dates). Their contracts ended at various dates; a few still have an enabled account
+    elsewhere, own an access profile, manage people or are still active."""
+    from isc_reporter.externals import DELIMITED, NON_EMPLOYEE, ExternalData, Settings, SourceInfo
+
+    def states(name):
+        return {name: {"technicalName": name, "identityState": "INACTIVE_SHORT_TERM"},
+                "active": {"technicalName": "active", "identityState": "ACTIVE"}}
+
+    contractors = SourceInfo("contractors", "Contractors", NON_EMPLOYEE, "nelm-contractors",
+                             {"Contractors": "Contractors"})
+    interns = SourceInfo("interns", "Interns", DELIMITED, "", {"Interns": "Interns"})
+    accounts: dict[str, list[dict]] = {contractors.id: [], interns.id: []}
+    records: dict[str, list[dict]] = {contractors.id: []}
+    identities, managed = {}, {}
+    externals = [p for p in people if p["identityProfile"]["name"] == "Contractors"][:48]
+    for n, person in enumerate(externals):
+        source = interns if n % 4 == 0 else contractors
+        days = rng.choice([-90, -10, 12, 40, 75, 120, 180, 260, 400, 650])
+        if n % 7 == 3 or n % 9 == 2 or n % 11 == 4 or n % 17 == 6:
+            days = 200                                  # left long ago, but something is left behind
+        end = today - timedelta(days=days)
+        login = person["name"].replace(".", "")
+        account = {"id": _id(rng), "name": login, "nativeIdentity": login, "identityId": person["id"],
+                   "identity": {"id": person["id"], "name": person["name"]}, "attributes": {}}
+        if source is interns:
+            account["attributes"]["endDate"] = "TBD" if n == 12 else end.strftime("%d/%m/%Y")
+        else:
+            records[source.id].append({"id": _id(rng), "accountName": login,
+                                       "endDate": None if n % 13 == 5 else end.isoformat() + "T00:00:00Z"})
+        accounts[source.id].append(account)
+        others = [{"id": _id(rng), "source": {"id": a["source"]["name"], "name": a["source"]["name"]},
+                   "disabled": not (days < 0 or n % 7 == 3)} for a in person["accounts"]]
+        state = "active" if days < 0 or n % 9 == 2 else "inactive"
+        identities[person["id"]] = {
+            **person, "identityProfile": {"id": source.name, "name": source.name}, "accounts": others,
+            "attributes": {**person["attributes"], "cloudLifecycleState": state, "endDate": end.isoformat()},
+            "owns": {"accessProfiles": [{"id": "ap"}]} if n % 11 == 4 else {}}
+        if n % 17 == 6:
+            managed[person["id"]] = 2
+    badge = "temp-badge-07"
+    accounts[contractors.id].append({"id": _id(rng), "name": badge, "nativeIdentity": badge,
+                                     "uncorrelated": True, "attributes": {}})
+    records[contractors.id].append({"id": _id(rng), "accountName": badge,
+                                    "endDate": (today - timedelta(days=300)).isoformat() + "T00:00:00Z"})
+    lifecycle = {"Contractors": states("inactive"), "Interns": states("inactive")}
+    return ExternalData([contractors, interns], accounts, records, identities, managed, lifecycle,
+                        Settings(90), today, origin="demo")
+
+
 def sample_role_impact(rng: random.Random, people: list[dict]):
     """A disabled 'Finance Analyst' role for active Finance people or members of GRP-007, over the
     fictional identities: some already have it or its access, some lost the criteria, some requested
@@ -779,6 +830,7 @@ def run(folder: str) -> list[str]:
     from isc_reporter import (
         attribute_history,
         certification_reports,
+        externals,
         identity_profiles,
         leavers,
         mappings_html,
@@ -853,6 +905,10 @@ def run(folder: str) -> list[str]:
     base = os.path.join(folder, "leavers")
     out += [leavers.write_xlsx(base + ".xlsx", residual), leavers.write_pdf(base + ".pdf", residual),
             leavers.write_csv(base + ".csv", residual)]
+    ended = externals.analyse(sample_externals(random.Random(19), people, now.date()))
+    base = os.path.join(folder, "externals")
+    out += [externals.write_xlsx(base + ".xlsx", ended), externals.write_pdf(base + ".pdf", ended),
+            externals.write_csv(base + ".csv", ended), externals.write_plan(base + ".plan.json", ended)]
     analysis = transform_analysis.analyse(*sample_transform_analysis(), origin="demo")
     out += transform_analysis.write_outputs(analysis, os.path.join(folder, "transform-analysis"))
     impact = role_impact.analyse(sample_role_impact(random.Random(17), people))

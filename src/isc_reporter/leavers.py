@@ -53,18 +53,11 @@ def fetch(isc, states: list[str] | None = None, exclude_sources: list[str] | Non
           include_authoritative: bool = False, date_attribute: str = "", grace: int = 0) -> LeaverData:
     """Lifecycle states of every identity profile, the sources, and the identities in the leaver
     states (by default, the states configured as inactive)."""
-    from isc_reporter.api import error_message, list_all, model_json
+    from isc_reporter.api import list_all
     from isc_reporter.search import search_all
 
     profiles = {p.id: p.name for p in list_all(isc.identity_profiles.list_identity_profiles_v1)}
-    lifecycle, notes = {}, []
-    for profile_id, name in profiles.items():
-        try:
-            found = list_all(isc.lifecycle_states.get_lifecycle_states_v1, identity_profile_id=profile_id)
-        except Exception as exc:
-            notes.append(f"Lifecycle states of the profile '{name}' not read ({error_message(exc)}).")
-            continue
-        lifecycle[profile_id] = {s.get("technicalName", ""): s for s in (model_json(x) for x in found)}
+    lifecycle, notes = read_lifecycle(isc, profiles)
     states = states or default_states(lifecycle)
     if not states:
         raise UsageError("no lifecycle state is configured as inactive: give the leaver states with "
@@ -82,6 +75,22 @@ def fetch(isc, states: list[str] | None = None, exclude_sources: list[str] | Non
     log.info("%d identit(ies) in %s", len(identities), ", ".join(states))
     return LeaverData(states, identities, lifecycle, profiles, skipped, date_attribute, grace,
                       notes=notes, origin=isc.base_url)
+
+
+def read_lifecycle(isc, profiles: dict[str, str]) -> tuple[dict[str, dict[str, dict]], list[str]]:
+    """The lifecycle states of each identity profile (id -> name): profile id -> technical name ->
+    state, and a note for each profile whose states could not be read."""
+    from isc_reporter.api import error_message, list_all, model_json
+
+    lifecycle, notes = {}, []
+    for profile_id, name in profiles.items():
+        try:
+            found = list_all(isc.lifecycle_states.get_lifecycle_states_v1, identity_profile_id=profile_id)
+        except Exception as exc:
+            notes.append(f"Lifecycle states of the profile '{name}' not read ({error_message(exc)}).")
+            continue
+        lifecycle[profile_id] = {s.get("technicalName", ""): s for s in (model_json(x) for x in found)}
+    return lifecycle, notes
 
 
 def default_states(lifecycle: dict[str, dict[str, dict]]) -> list[str]:

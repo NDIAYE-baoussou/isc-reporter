@@ -5,6 +5,20 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `externals`: externals who left. It lists the accounts of non-employee and delimited file sources
+  whose end date is at least `--days` days past, and checks each against its identity: its end
+  date, lifecycle state and identity profile, its accounts on other sources, the objects it owns
+  and the identities it manages. Each account is *to delete*, *to review* (with the reasons) or
+  *left recently*. The accounts to delete are written to a plan (`.plan.json`). Dates are read in
+  ISO 8601, yyyyMMdd, dd/MM/yyyy or MM/dd/yyyy; a date that reads both ways is never guessed
+  (`--date-format`).
+- `iscr-clean`: a new, separate command, and the only one that changes a tenant.
+  `iscr-clean externals PLAN --env NAME` checks every account of a reviewed plan again and lists
+  what it would delete. With `--apply` and a typed confirmation, it saves a backup, deletes the
+  non-employee records (ISC then deletes the accounts and identities) or the accounts of delimited
+  file sources, and writes each result to an audit file. It refuses a plan of another tenant or
+  older than `--max-age` days, and more than `--max` accounts in one run. `isc-reporter` (`iscr`)
+  itself stays read-only, and a test checks that no other module calls a write endpoint.
 - `migration`: everything that depends on the source to replace, with what to do for each object.
   - `--new-source` is now optional: when the new source is not chosen yet, the report lists the
     impacts and the attributes in use, without drafts.

@@ -1,10 +1,11 @@
 # Permissions
 
 isc-reporter connects with the client ID and secret of a
-[personal access token](https://documentation.sailpoint.com/saas/help/common/api_keys.html) and
-only calls read endpoints: `GET` requests, plus `POST /search/v1`, which runs a search and changes
-nothing. This page lists, for each command, the API endpoints it calls, the scopes they require and
-the user levels allowed to call them.
+[personal access token](https://documentation.sailpoint.com/saas/help/common/api_keys.html).
+`isc-reporter` (`iscr`) only calls read endpoints: `GET` requests, plus `POST /search/v1`, which
+runs a search and changes nothing. `iscr-clean`, a separate command, is the only one that deletes:
+see [iscr-clean](#iscr-clean). This page lists, for each command, the API endpoints it calls, the
+scopes they require and the user levels allowed to call them.
 
 Save the token as an environment (`isc-reporter env add`): its client secret goes to the credential
 store of the computer (Windows Credential Manager, macOS Keychain, Secret Service), not to a file.
@@ -34,6 +35,7 @@ next to the `:read` one shown here.
 | `migration` | `ORG_ADMIN` | `idn:identity-profile:read`, `idn:identity-profile-lifecycle-state:read`, `idn:transform:read`, `idn:identity-profile-attribute:read`, `idn:sources:read`, `idn:source-schema:read`, `idn:provisioning-policy:read`, `idn:role-unchecked:read`, `idn:access-profile:read`, `idn:segment:read`, `idn:rule-management-connector:read`, `sp:workflow:read`, `idn:sod-policy:read`, `idn:password-policy:read`, `sp:search:read` |
 | `migration --from` | no tenant access (reads exported JSON) | none |
 | `leavers` | `ORG_ADMIN` | `idn:identity-profile:read`, `idn:identity-profile-lifecycle-state:read`, `idn:sources:read`, `sp:search:read` |
+| `externals` | `ORG_ADMIN` | `idn:nelm:read`, `idn:sources:read`, `idn:accounts:read`, `idn:identity-profile:read`, `idn:identity-profile-lifecycle-state:read`, `sp:search:read` |
 | `role-impact` | `ORG_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` (`ORG_ADMIN` when the criteria read account attributes) | `idn:role-unchecked:read`, `sp:search:read`, and `idn:accounts:read` when the criteria read account attributes |
 | `analyze-before-sync` | `ORG_ADMIN` | `idn:sources:read`, `idn:provisioning-policy:read`, `idn:accounts:read`, `sp:search:read` |
 | `analyze-before-sync --only-map` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN` | `idn:sources:read`, `idn:accounts:read`, `sp:search:read` |
@@ -69,28 +71,48 @@ the attribute synchronization without `idn:attr-sync-source-config:read`) is lis
 *Settings* sheet, its columns stay empty, and the rest of the report is still produced. A kind of
 call refused with HTTP 401 or 403 is not tried again for the next sources.
 
+**Non-employee records in `externals`.** Without `idn:nelm:read`, the non-employee sources and
+records cannot be read: the report says so, the accounts are still analysed with the account
+attribute `endDate` (or `--account-attribute`), and none of a non-employee source is to delete.
+
 **Objects in `migration`.** Each type of object is read on its own. A type that cannot be read (for
 example without `idn:sod-policy:read`) is reported in the *Checks* sheet and shown as *not analysed*
 in the *Overview* sheet, and the rest of the analysis is still produced.
+
+## iscr-clean
+
+`iscr-clean externals` first runs the analysis of `externals` again, with the plan's settings: it
+needs the scopes of `externals`. With `--apply`, it also exports the non-employees of each
+non-employee source involved, as a backup, and deletes:
+
+| Endpoint | What it deletes | Scope | User levels in the specification |
+| --- | --- | --- | --- |
+| `GET /non-employee-sources/v1/{id}/non-employees/download` | nothing: the backup of a non-employee source, before deleting | `idn:nelm:read` | not stated |
+| `DELETE /non-employee-records/v1/{id}` | a non-employee record; ISC deletes its account and, on the source the identity profile is built from, the identity | `idn:nelm:manage` | not stated |
+| `DELETE /accounts/v1/{id}` | an account of a delimited file source (the only type this endpoint accepts), in ISC only: not in the file | `idn:accounts:manage` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN` |
+
+Give `iscr-clean` its own environment (`iscr env add clean-prod ...`), with a token that has these
+scopes, and keep the token of `iscr` read-only. A token without the delete scope stops `iscr-clean`
+at the first refusal (HTTP 401 or 403), with nothing else deleted.
 
 ## By endpoint
 
 | Endpoint | Used by | Scope | User levels in the specification |
 | --- | --- | --- | --- |
-| `POST /search/v1` | `search`, `changes`, `analyze-before-sync`, `leavers`, `role-impact`, `mappings` (access profile names), `migration` (entitlements of the old source) | `sp:search:read` | `ORG_ADMIN`, `CERT_ADMIN`, `REPORT_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
+| `POST /search/v1` | `search`, `changes`, `analyze-before-sync`, `leavers`, `externals`, `role-impact`, `mappings` (access profile names), `migration` (entitlements of the old source) | `sp:search:read` | `ORG_ADMIN`, `CERT_ADMIN`, `REPORT_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
 | `GET /historical-identities/v1/{id}/events` | `changes` | `idn:identity-history:read` | not stated |
 | `GET /campaigns/v1` | `campaigns` | `idn:campaign:read` (or `idn:campaign-report:read`) | `ORG_ADMIN`, `CERT_ADMIN`, `REPORT_ADMIN` |
 | `GET /certifications/v1` | `campaigns` | `idn:campaign:read` | not stated |
 | `GET /certifications/v1/{id}/decision-summary` | `campaigns` (not with `--no-summaries`) | `idn:campaign:read` | `ORG_ADMIN`, `CERT_ADMIN` |
 | `GET /certifications/v1/{id}/access-review-items` | `campaigns --items` | `idn:campaign:read` | `ORG_ADMIN`, `CERT_ADMIN` |
 | `GET /campaign-filters/v1` | `campaigns` | `idn:campaign-filter:manage` | not stated |
-| `GET /identity-profiles/v1` | `mappings`, `transforms`, `migration`, `leavers`, `snapshot` | `idn:identity-profile:read` | `ORG_ADMIN`, `API` |
+| `GET /identity-profiles/v1` | `mappings`, `transforms`, `migration`, `leavers`, `externals`, `snapshot` | `idn:identity-profile:read` | `ORG_ADMIN`, `API` |
 | `GET /transforms/v1` | `mappings`, `transforms`, `migration`, `snapshot` | `idn:transform:read` | `ORG_ADMIN` |
 | `GET /identity-attributes/v1` | `mappings`, `migration`, `snapshot` | `idn:identity-profile-attribute:read` | not stated |
-| `GET /sources/v1` | `mappings`, `transforms`, `migration`, `analyze-before-sync`, `leavers`, `snapshot`, `sources` | `idn:sources:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `ROLE_SUBADMIN` |
+| `GET /sources/v1` | `mappings`, `transforms`, `migration`, `analyze-before-sync`, `leavers`, `externals`, `snapshot`, `sources` | `idn:sources:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `ROLE_SUBADMIN` |
 | `GET /sources/v1/{sourceId}/schemas` | `migration`, `snapshot` | `idn:source-schema:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN` |
 | `GET /sources/v1/{sourceId}/provisioning-policies` | `mappings`, `transforms`, `migration`, `analyze-before-sync`, `snapshot`, `sources` | `idn:provisioning-policy:read` | `ORG_ADMIN` |
-| `GET /identity-profiles/v1/{identity-profile-id}/lifecycle-states` | `leavers`, `mappings`, `migration`, `snapshot` | `idn:identity-profile-lifecycle-state:read` | `ORG_ADMIN` |
+| `GET /identity-profiles/v1/{identity-profile-id}/lifecycle-states` | `leavers`, `externals`, `mappings`, `migration`, `snapshot` | `idn:identity-profile-lifecycle-state:read` | `ORG_ADMIN` |
 | `GET /sources/v1/{id}/correlation-config` | `migration`, `snapshot`, `sources` | `idn:sources:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN` |
 | `GET /roles/v1` | `migration`, `role-impact`, `snapshot` | `idn:role-unchecked:read` (or `idn:role-checked:read`) | `ORG_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
 | `GET /roles/v1/{roleId}/dimensions` | `migration`, `snapshot` (dynamic roles) | `idn:role-unchecked:read` (or `idn:role-checked:read`) | `ORG_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
@@ -102,7 +124,9 @@ in the *Overview* sheet, and the rest of the analysis is still produced.
 | `GET /sod-policies/v1` | `migration`, `snapshot` | `idn:sod-policy:read` | `ORG_ADMIN`, `SOD_POLICY_ADMIN` |
 | `GET /workgroups/v1` | `snapshot` | `idn:workgroup:read` | `ORG_ADMIN` |
 | `GET /password-policies/v1` | `migration`, `snapshot` | `idn:password-policy:read` | not stated |
-| `GET /accounts/v1` | `analyze-before-sync`, `role-impact` (account criteria), `sources` (counts only, with `count=true`) | `idn:accounts:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `HELPDESK` |
+| `GET /accounts/v1` | `analyze-before-sync`, `externals`, `role-impact` (account criteria), `sources` (counts only, with `count=true`) | `idn:accounts:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `HELPDESK` |
+| `GET /non-employee-sources/v1` | `externals` | `idn:nelm:read` | `ORG_ADMIN` |
+| `GET /non-employee-records/v1` | `externals` (filtered on the source) | `idn:nelm:read` | not stated |
 | `GET /sources/v1/{sourceId}/schedules` | `sources` | `idn:sources:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN` |
 | `GET /sources/v1/{id}/attribute-sync-config` | `sources` (sources that can provision) | `idn:attr-sync-source-config:read` (experimental API) | `ORG_ADMIN`, `HELPDESK` |
 | `GET /task-status/v1` | `sources` (last account aggregation) | `idn:task-management:read` | `ORG_ADMIN`, `HELPDESK`, `CERT_ADMIN`, `REPORT_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN` |
@@ -121,7 +145,9 @@ in the *Overview* sheet, and the rest of the analysis is still produced.
   source, the lifecycle states of each identity profile and the dimensions of each dynamic role, one
   call each, and the entitlements of the old source with a search. `snapshot` reads the schemas, provisioning policies and
   correlation of each source, the lifecycle states of each identity profile and the dimensions of
-  each dynamic role, one call each. `sources` makes up to seven calls per source (provisioning
+  each dynamic role, one call each. `externals` reads every account (and non-employee record) of
+  each source, in pages of 250, then one search per 100 identities whose account ended, and one per
+  100 of them that manage others. `sources` makes up to seven calls per source (provisioning
   policies, schedule, correlation, attribute synchronization, last aggregation and two account
   counts), one with `--quick`. `role-impact` reads every identity matching `--query` (all
   by default) with its access, in pages of 250, and every account of the sources its account

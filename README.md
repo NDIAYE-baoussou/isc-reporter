@@ -8,7 +8,9 @@
 Reports and change-impact analysis for **SailPoint Identity Security Cloud (ISC)**, from the
 command line. `isc-reporter` turns what your tenant holds into Excel dashboards (KPI tiles, native
 charts, filterable tables), PDF and CSV files people can read, and shows what a configuration
-change would do before you make it. It only reads from the tenant.
+change would do before you make it. It only reads from the tenant. The one exception is
+`iscr-clean`, a separate command that deletes the accounts of externals who left, from a plan you
+have reviewed.
 
 ![Certification campaign dashboard](https://raw.githubusercontent.com/NDIAYE-baoussou/isc-reporter/main/docs/images/campaigns.png)
 
@@ -29,6 +31,10 @@ change would do before you make it. It only reads from the tenant.
 - **Change safely.** Before replacing a source, enabling attribute synchronization or enabling a
   role, see what would be impacted, updated or provisioned, with draft JSON to review. *For
   implementation teams and consultants.*
+- **Clean up, carefully.** Contractors, interns and other externals whose end date passed long ago:
+  which accounts can be deleted, with their identity, and which would leave something behind
+  (access on other sources, owned objects, people they manage). The deletion is a separate
+  command, from a plan you review. *For IAM operations.*
 - **Keep audit evidence.** Every certification decision with its reviewer comment, attribute
   change history, the query behind each report, and snapshots of the configuration whose history
   shows what changed and when, in files you can archive. *For audit and compliance.*
@@ -46,10 +52,12 @@ change would do before you make it. It only reads from the tenant.
 | `migration` | Impact of replacing a source (a new HR system, or any other), even when the new one is not chosen yet: everything that depends on it, with what to do for each object. Identity profiles, identity attributes, transforms and mappings before / after, roles, access profiles, SoD policies, lifecycle states, correlation, provisioning policies, segments, workflows, connector rules and password policies, with draft JSON once the new source is known. | xlsx, pdf, csv, JSON drafts | Beta |
 | `analyze-before-sync` | Forecast of the updates ISC could send to a target system if attribute synchronization is enabled on a source: values added, changed or cleared, per attribute and per account. | xlsx, pdf, csv | Experimental |
 | `leavers` | Identities in a leaver lifecycle state that still have enabled accounts, and for each account whether the lifecycle state should have disabled it (a failure to fix) or does not cover it (a configuration gap). | xlsx, pdf, csv | Beta |
+| `externals` | Externals who left: accounts of non-employee and delimited file sources whose end date is at least N days past, checked against their identity (its end date, lifecycle state, accounts on other sources, owned objects, people it manages). Each is *to delete*, *to review* (with the reasons) or *left recently*, and a plan lists those to delete with `iscr-clean`. | xlsx, pdf, csv, JSON plan | Experimental |
 | `role-impact` | Before enabling a role: the identities its membership criteria select, the entitlements ISC would provision to them and the accounts it would create, who would lose the role, and who already holds its access without matching. Works on a draft role with new criteria too. | xlsx, pdf, csv | Experimental |
 | `snapshot` | Configuration snapshot: transforms, identity profiles with their lifecycle states, identity attributes, sources with their schemas, provisioning policies and correlation, roles, access profiles, segments, connector rules, workflows, SoD policies, governance groups and password policies, **one JSON file per object**, secrets redacted. Taken again into the same folder, only what changed in the tenant changes: keep it under git for the history of the configuration. Reports run on it with `--from`. | JSON files | Experimental |
 | `demo` | Every report above, built from fictional data, without a tenant. | all of the above | |
 | `env` | Tenant environments: one per tenant (dev, sandbox, prod), switched with `env use` or `--env`; the client secret is kept in the credential store of the computer, never in a file. See [Configuration](#configuration). | | Beta |
+| `iscr-clean externals` | **A separate command, the only one that changes the tenant.** It deletes the accounts of a plan of `externals`: each is checked again first, and nothing is deleted without `--apply` and a typed confirmation. See [Externals who left](#externals-who-left). | audit csv, backup | Experimental |
 
 **Beta**: documented and covered by automated tests; needs validation on more real tenants.
 **Experimental**: new; its results rest on assumptions still to be confirmed on real tenants, and
@@ -91,7 +99,8 @@ You need Python 3.10 or later.
 
 `iscr` is a short name for the same command: `iscr demo` works too. If the command is not found, or
 is blocked by an application control policy (common on managed Windows computers), run it through
-Python instead: `python -m iscr demo` (`py -m iscr demo` on Windows).
+Python instead: `python -m iscr demo` (`py -m iscr demo` on Windows). The same goes for
+`iscr-clean`: `python -m isc_reporter.clean`.
 
 ## Configuration
 
@@ -137,10 +146,17 @@ option.
 
 ## Safety, permissions and privacy
 
-- **Read-only.** isc-reporter only reads from your tenant: it never creates, changes or deletes
-  anything. `migration` and `transforms` write draft JSON to local files for you to review,
+- **Read-only.** `iscr` (`isc-reporter`) only reads from your tenant: it never creates, changes or
+  deletes anything. `migration` and `transforms` write draft JSON to local files for you to review,
   `analyze-before-sync` forecasts updates without sending any, `role-impact` evaluates a role's
-  criteria without assigning it, and `snapshot` saves the configuration without restoring anything.
+  criteria without assigning it, `snapshot` saves the configuration without restoring anything, and
+  `externals` writes a plan without deleting anything.
+- **Deleting is separate.** `iscr-clean` is the only command that changes a tenant, and only to
+  delete what a reviewed plan of `externals` lists. It needs `--env` (never the current environment
+  by default), refuses a plan of another tenant or older than 7 days, checks every account again,
+  deletes nothing without `--apply` and a typed confirmation, saves a backup first, and writes
+  every call to an audit file. Give it its own environment and token, the only one with delete
+  rights; the token of `iscr` can stay read-only.
 - **Offline where it can be.** `demo`, `mappings --from`, `transforms --from` and `migration --from`
   use fictional data, exported JSON files or a snapshot, and never connect.
 - **Least privilege.** [docs/permissions.md](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/docs/permissions.md)
@@ -495,6 +511,60 @@ ISO 8601, dd/MM/yyyy or yyyyMMdd) the report shows the days since leaving, and w
 accounts still enabled after that many days. Sheets: *Dashboard*, *Leavers with access*, *Enabled
 accounts* (privileged first), *By source*, *Lifecycle states* (their account actions) and
 *Settings*.
+
+### Externals who left
+
+```bash
+isc-reporter externals --source "Contractors" --days 90                    # a non-employee source
+isc-reporter externals --source "Interns file" --days 30 --account-attribute contractEnd
+iscr-clean externals outputs/externals_<ts>.plan.json --env prod           # checks again, deletes nothing
+iscr-clean externals outputs/externals_<ts>.plan.json --env prod --apply   # deletes, once confirmed
+```
+
+**1. Analyse (`externals`, read-only).** Lists the accounts of non-employee and delimited file
+sources whose end date is at least `--days` days past. The end date is the one of the non-employee
+record, or the account attribute `endDate`; `--account-attribute` gives another (run once per
+source when they differ). Dates can be ISO 8601, yyyyMMdd, dd/MM/yyyy or MM/dd/yyyy: the values of
+the attribute tell which of the last two it is, and a date that reads both ways (03/04/2026) is
+never guessed; `--date-format` gives the format.
+
+Deleting the account of the source an identity profile is built from deletes the identity too
+(SailPoint documents it for non-employee sources), and the identity's accounts on other sources
+then become uncorrelated, *with their access*. So an account that ended is **to delete** only when
+nothing would be left behind:
+
+- the identity's end date (`--identity-attribute`, `endDate` by default; `''` not to compare) is
+  as old;
+- its lifecycle state is a leaver state: one configured as inactive, or one of `--states`;
+- its identity profile is built from this source;
+- it has no enabled account on another source (disabled ones are listed in *Notes*);
+- it owns nothing (sources, roles, access profiles, entitlements, applications, governance groups)
+  and manages no one;
+- for a non-employee source, a non-employee record has the account's name.
+
+Otherwise it is **to review**, with the reasons. Accounts that ended more recently are **left
+recently**, with the first day they can go. Sheets: *Dashboard*, *To delete*, *To review*, *Left
+recently*, *By source* and *Settings*. The accounts to delete are also written to a plan,
+`<output>.plan.json`: remove from it the accounts to keep.
+
+**2. Delete (`iscr-clean externals`, a separate command).** It reads the plan, connects to the
+environment named with `--env` and checks that it is the tenant of the plan. Then it runs the
+analysis again with the plan's settings, and skips every account that changed: gone, end date
+moved, now to review, another identity or record. Without `--apply` it stops there and writes
+`checked.csv`. With `--apply`, after you type `delete <count>` (or give `--confirm <count>`), it:
+
+1. saves a backup: the accounts, records and identities as JSON, and the export of each
+   non-employee source;
+2. deletes the non-employee record (ISC deletes the account and the identity), or the account of a
+   delimited file source;
+3. writes each result to `deleted.csv` as it goes, and stops on a permission error or after 5
+   failures in a row.
+
+It refuses a plan older than `--max-age` days (7) and more than `--max` accounts in one run (100).
+
+> **Delimited file sources.** ISC only deletes the account it holds: remove the rows from the file
+> too, or the next aggregation brings the accounts and their identities back. Try one account in
+> a sandbox first, to see how your tenant removes its identity.
 
 ### Before enabling a role
 

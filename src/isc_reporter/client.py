@@ -86,6 +86,10 @@ class Isc:
         return self._api("ManagedClustersApi")
 
     @property
+    def non_employee(self):
+        return self._api("NonEmployeeLifecycleManagementApi")
+
+    @property
     def password_policies(self):
         return self._api("PasswordPoliciesApi")
 

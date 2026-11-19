@@ -79,7 +79,7 @@ class FakeIsc:
     APIS = ("access_profiles", "accounts", "campaigns", "campaign_filters", "certifications",
             "certification_summaries", "connector_rules", "dimensions", "governance_groups",
             "identity_attributes", "identity_history", "identity_profiles", "lifecycle_states",
-            "managed_clusters", "password_policies", "roles", "search", "segments",
+            "managed_clusters", "non_employee", "password_policies", "roles", "search", "segments",
             "service_desk_integrations", "sod_policies", "sources", "task_management", "transforms",
             "workflows")
 

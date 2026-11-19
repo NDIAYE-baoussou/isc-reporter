@@ -394,6 +394,41 @@ def _leavers(args) -> int:
     return 0
 
 
+def _externals(args) -> int:
+    from isc_reporter import externals
+
+    if args.days < 0:
+        raise UsageError("--days must be 0 or more")
+    settings = externals.Settings(args.days, args.account_attribute or "", args.identity_attribute,
+                                  args.date_format or "", args.states or [])
+    isc = _connect(args)
+    data = externals.fetch(isc, args.source, settings)
+    for note in data.notes:
+        log.warning("%s", note)
+    result = externals.analyse(data)
+    base = _base(args, "externals")
+    for fmt in dict.fromkeys(args.format):
+        path = base + "." + fmt
+        if fmt == "xlsx":
+            externals.write_xlsx(path, result, args.title or "")
+        elif fmt == "pdf":
+            externals.write_pdf(path, result, args.title or "", args.pdf_max_rows)
+        else:
+            externals.write_csv(path, result)
+        log.info("%s: %s", fmt.upper(), path)
+    counts = {status: sum(row.status == status for row in result.rows) for status in externals.STATUSES}
+    delete, review = counts[externals.TO_DELETE], counts[externals.TO_REVIEW]
+    log.info("%d account(s) ended at least %d day(s) ago: %d to delete, %d to review; %d left more recently",
+             delete + review, args.days, delete, review, counts[externals.RECENT])
+    if not counts[externals.TO_DELETE]:
+        log.info("Nothing to delete: no plan written")
+        return 0
+    path = externals.write_plan(base + ".plan.json", result)
+    log.info("Plan: %s. Review it, then check it again with: iscr-clean externals \"%s\" --env <name>  "
+             "(nothing is deleted without --apply)", path, path)
+    return 0
+
+
 def _role_impact(args) -> int:
     from isc_reporter import role_impact
 
@@ -534,8 +569,9 @@ def build_parser() -> argparse.ArgumentParser:
                     "certification campaigns, identity attribute history, source status and capabilities, "
                     "identity attribute mappings and "
                     "transform dependencies, transform analysis with optimized drafts, leavers who still "
-                    "have access, source migrations, attribute sync forecasts, role enablement impact and "
-                    "configuration snapshots. Read-only.",
+                    "have access, externals who left, source migrations, attribute sync forecasts, role "
+                    "enablement impact and configuration snapshots. Read-only: deleting is the separate "
+                    "iscr-clean command.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -693,6 +729,32 @@ def build_parser() -> argparse.ArgumentParser:
                         "since leaving")
     p.add_argument("--grace", type=int, default=0, metavar="DAYS",
                    help="days allowed to revoke access after the departure date (with --date-attribute)")
+    p.add_argument("--title", help="report title")
+    p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
+    formats(p)
+    output(p)
+
+    p = command("externals", _externals, "Externals who left: accounts of non-employee and delimited file "
+                                         "sources whose end date is at least --days past, checked against "
+                                         "their identity (end date, lifecycle state, other accounts, owned "
+                                         "objects, people managed), and a plan of those to delete with "
+                                         "iscr-clean. Changes nothing.")
+    p.add_argument("--source", action="append", required=True, metavar="NAME",
+                   help="a non-employee or delimited file source (repeatable)")
+    p.add_argument("--days", type=int, required=True,
+                   help="only accounts whose end date is at least DAYS days past")
+    p.add_argument("--account-attribute", metavar="ATTRIBUTE",
+                   help="account attribute holding the end date (default: the end date of the non-employee "
+                        "record, endDate on other sources)")
+    p.add_argument("--identity-attribute", default="endDate", metavar="ATTRIBUTE",
+                   help="identity attribute holding the end date, compared with the account's (default "
+                        "endDate; '' not to compare)")
+    p.add_argument("--date-format", metavar="FORMAT",
+                   help="format of the end dates, e.g. %%d/%%m/%%Y (default: ISO 8601, yyyyMMdd, and "
+                        "dd/MM/yyyy or MM/dd/yyyy when the values tell which)")
+    p.add_argument("--states", nargs="+", metavar="STATE",
+                   help="leaver lifecycle states (technical names); default: the states configured as "
+                        "inactive")
     p.add_argument("--title", help="report title")
     p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
     formats(p)

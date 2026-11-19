@@ -19,6 +19,7 @@ def test_demo_writes_every_report(tmp_path):
     assert {"transform-analysis/transform-analysis.xlsx",
             "transform-analysis/optimized/changes.csv"} <= written
     assert {"leavers.xlsx", "leavers.pdf", "leavers.csv"} <= written
+    assert {"externals.xlsx", "externals.pdf", "externals.csv", "externals.plan.json"} <= written
     assert {"role-impact.xlsx", "role-impact.pdf", "role-impact.csv"} <= written
     assert {"sources.xlsx", "sources.pdf", "sources.csv"} <= written
     for path in written:
@@ -38,6 +39,25 @@ def test_demo_forecast_shows_every_kind_of_update():
     assert kinds == {sync_impact.ADD, sync_impact.CHANGE, sync_impact.CLEAR, sync_impact.CASE}
     assert result.uncorrelated == 3 and result.verdict == "Bulk update expected"
     assert [field["Field"] for field in ignored] == ["sAMAccountName", "password"]
+
+
+def test_demo_externals_shows_every_status_and_reason():
+    import random
+    from datetime import date
+
+    from isc_reporter import demo, externals
+
+    data = demo.sample_externals(random.Random(19), demo.identities(random.Random(7)), date(2026, 10, 15))
+    result = externals.analyse(data)
+    assert {row.status for row in result.rows} == set(externals.STATUSES)
+    reasons = {label for row in result.rows for label, _ in row.reasons}
+    assert {externals.OTHER_ENABLED, externals.OWNS, externals.MANAGER, externals.NOT_LEAVER,
+            externals.UNREADABLE} <= reasons
+    kinds = {row.source.kind for row in result.rows if row.status == externals.TO_DELETE}
+    assert kinds == {externals.NON_EMPLOYEE, externals.DELIMITED}
+    assert any("Uncorrelated" in note for row in result.rows for note in row.notes)
+    counts = [result.counts[s.id] for s in data.sources]
+    assert sum(c["No end date"] for c in counts) and sum(c["End date to come"] for c in counts)
 
 
 def test_demo_role_impact_shows_every_outcome():
