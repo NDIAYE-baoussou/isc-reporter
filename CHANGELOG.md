@@ -5,6 +5,8 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-26
+
 - `attribute`: a detailed report on one identity attribute or a list of them. For each: its
   definition (settings, and how each identity profile computes it, with the transform tree),
   everything that uses it (other mappings, transforms, provisioning policies, role and dimension
