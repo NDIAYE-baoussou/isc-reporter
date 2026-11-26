@@ -34,6 +34,7 @@ next to the `:read` one shown here.
 | `transforms --from` | no tenant access (reads exported JSON) | none |
 | `migration` | `ORG_ADMIN` | `idn:identity-profile:read`, `idn:identity-profile-lifecycle-state:read`, `idn:transform:read`, `idn:identity-profile-attribute:read`, `idn:sources:read`, `idn:source-schema:read`, `idn:provisioning-policy:read`, `idn:role-unchecked:read`, `idn:access-profile:read`, `idn:segment:read`, `idn:rule-management-connector:read`, `sp:workflow:read`, `idn:sod-policy:read`, `idn:password-policy:read`, `sp:search:read` |
 | `migration --from` | no tenant access (reads exported JSON) | none |
+| `attribute` | `ORG_ADMIN` | `idn:identity-profile-attribute:read`, `idn:identity-profile:read`, `idn:transform:read`, `idn:sources:read`, `idn:provisioning-policy:read`, `idn:role-unchecked:read`, `idn:segment:read`, `sp:workflow:read`, `sp:search:read`, and `idn:identity-profile-lifecycle-state:read` for `cloudLifecycleState` |
 | `leavers` | `ORG_ADMIN` | `idn:identity-profile:read`, `idn:identity-profile-lifecycle-state:read`, `idn:sources:read`, `sp:search:read` |
 | `externals` | `ORG_ADMIN` | `idn:nelm:read`, `idn:sources:read`, `idn:accounts:read`, `idn:identity-profile:read`, `idn:identity-profile-lifecycle-state:read`, `sp:search:read` |
 | `role-impact` | `ORG_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` (`ORG_ADMIN` when the criteria read account attributes) | `idn:role-unchecked:read`, `sp:search:read`, and `idn:accounts:read` when the criteria read account attributes |
@@ -75,6 +76,9 @@ call refused with HTTP 401 or 403 is not tried again for the next sources.
 records cannot be read: the report says so, the accounts are still analysed with the account
 attribute `endDate` (or `--account-attribute`), and none of a non-employee source is to delete.
 
+**Objects in `attribute`.** Roles, segments, the correlation of each source and workflows are read type by type: a
+type that cannot be read is listed in the *Settings* sheet, and its uses are missing from *Used by*.
+
 **Objects in `migration`.** Each type of object is read on its own. A type that cannot be read (for
 example without `idn:sod-policy:read`) is reported in the *Checks* sheet and shown as *not analysed*
 in the *Overview* sheet, and the rest of the analysis is still produced.
@@ -99,28 +103,28 @@ at the first refusal (HTTP 401 or 403), with nothing else deleted.
 
 | Endpoint | Used by | Scope | User levels in the specification |
 | --- | --- | --- | --- |
-| `POST /search/v1` | `search`, `changes`, `analyze-before-sync`, `leavers`, `externals`, `role-impact`, `mappings` (access profile names), `migration` (entitlements of the old source) | `sp:search:read` | `ORG_ADMIN`, `CERT_ADMIN`, `REPORT_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
+| `POST /search/v1` | `search`, `attribute`, `changes`, `analyze-before-sync`, `leavers`, `externals`, `role-impact`, `mappings` (access profile names), `migration` (entitlements of the old source) | `sp:search:read` | `ORG_ADMIN`, `CERT_ADMIN`, `REPORT_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
 | `GET /historical-identities/v1/{id}/events` | `changes` | `idn:identity-history:read` | not stated |
 | `GET /campaigns/v1` | `campaigns` | `idn:campaign:read` (or `idn:campaign-report:read`) | `ORG_ADMIN`, `CERT_ADMIN`, `REPORT_ADMIN` |
 | `GET /certifications/v1` | `campaigns` | `idn:campaign:read` | not stated |
 | `GET /certifications/v1/{id}/decision-summary` | `campaigns` (not with `--no-summaries`) | `idn:campaign:read` | `ORG_ADMIN`, `CERT_ADMIN` |
 | `GET /certifications/v1/{id}/access-review-items` | `campaigns --items` | `idn:campaign:read` | `ORG_ADMIN`, `CERT_ADMIN` |
 | `GET /campaign-filters/v1` | `campaigns` | `idn:campaign-filter:manage` | not stated |
-| `GET /identity-profiles/v1` | `mappings`, `transforms`, `migration`, `leavers`, `externals`, `snapshot` | `idn:identity-profile:read` | `ORG_ADMIN`, `API` |
-| `GET /transforms/v1` | `mappings`, `transforms`, `migration`, `snapshot` | `idn:transform:read` | `ORG_ADMIN` |
-| `GET /identity-attributes/v1` | `mappings`, `migration`, `snapshot` | `idn:identity-profile-attribute:read` | not stated |
-| `GET /sources/v1` | `mappings`, `transforms`, `migration`, `analyze-before-sync`, `leavers`, `externals`, `snapshot`, `sources` | `idn:sources:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `ROLE_SUBADMIN` |
+| `GET /identity-profiles/v1` | `mappings`, `attribute`, `transforms`, `migration`, `leavers`, `externals`, `snapshot` | `idn:identity-profile:read` | `ORG_ADMIN`, `API` |
+| `GET /transforms/v1` | `mappings`, `attribute`, `transforms`, `migration`, `snapshot` | `idn:transform:read` | `ORG_ADMIN` |
+| `GET /identity-attributes/v1` | `mappings`, `attribute`, `migration`, `snapshot` | `idn:identity-profile-attribute:read` | not stated |
+| `GET /sources/v1` | `mappings`, `attribute`, `transforms`, `migration`, `analyze-before-sync`, `leavers`, `externals`, `snapshot`, `sources` | `idn:sources:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN`, `ROLE_SUBADMIN` |
 | `GET /sources/v1/{sourceId}/schemas` | `migration`, `snapshot` | `idn:source-schema:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN` |
-| `GET /sources/v1/{sourceId}/provisioning-policies` | `mappings`, `transforms`, `migration`, `analyze-before-sync`, `snapshot`, `sources` | `idn:provisioning-policy:read` | `ORG_ADMIN` |
-| `GET /identity-profiles/v1/{identity-profile-id}/lifecycle-states` | `leavers`, `externals`, `mappings`, `migration`, `snapshot` | `idn:identity-profile-lifecycle-state:read` | `ORG_ADMIN` |
-| `GET /sources/v1/{id}/correlation-config` | `migration`, `snapshot`, `sources` | `idn:sources:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN` |
-| `GET /roles/v1` | `migration`, `role-impact`, `snapshot` | `idn:role-unchecked:read` (or `idn:role-checked:read`) | `ORG_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
-| `GET /roles/v1/{roleId}/dimensions` | `migration`, `snapshot` (dynamic roles) | `idn:role-unchecked:read` (or `idn:role-checked:read`) | `ORG_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
+| `GET /sources/v1/{sourceId}/provisioning-policies` | `mappings`, `attribute`, `transforms`, `migration`, `analyze-before-sync`, `snapshot`, `sources` | `idn:provisioning-policy:read` | `ORG_ADMIN` |
+| `GET /identity-profiles/v1/{identity-profile-id}/lifecycle-states` | `leavers`, `attribute` (`cloudLifecycleState`), `externals`, `mappings`, `migration`, `snapshot` | `idn:identity-profile-lifecycle-state:read` | `ORG_ADMIN` |
+| `GET /sources/v1/{id}/correlation-config` | `migration`, `attribute`, `snapshot`, `sources` | `idn:sources:read` | `ORG_ADMIN`, `SOURCE_ADMIN`, `SOURCE_SUBADMIN` |
+| `GET /roles/v1` | `migration`, `attribute`, `role-impact`, `snapshot` | `idn:role-unchecked:read` (or `idn:role-checked:read`) | `ORG_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
+| `GET /roles/v1/{roleId}/dimensions` | `migration`, `attribute`, `snapshot` (dynamic roles) | `idn:role-unchecked:read` (or `idn:role-checked:read`) | `ORG_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN` |
 | `GET /roles/v1/{id}/assigned-identities` | `role-impact` | `idn:role-unchecked:read` (or `idn:role-checked:read`) | not stated |
-| `GET /segments/v1` | `migration`, `snapshot` | `idn:segment:read` | `ORG_ADMIN` |
+| `GET /segments/v1` | `migration`, `attribute`, `snapshot` | `idn:segment:read` | `ORG_ADMIN` |
 | `GET /access-profiles/v1` | `migration`, `snapshot` | `idn:access-profile:read` | `ORG_ADMIN`, `ROLE_ADMIN`, `ROLE_SUBADMIN`, `SOURCE_ADMIN` |
 | `GET /connector-rules/v1` | `migration`, `snapshot` | `idn:rule-management-connector:read` | `ORG_ADMIN` |
-| `GET /workflows/v1` | `migration`, `snapshot` | `sp:workflow:read` | not stated |
+| `GET /workflows/v1` | `migration`, `attribute`, `snapshot` | `sp:workflow:read` | not stated |
 | `GET /sod-policies/v1` | `migration`, `snapshot` | `idn:sod-policy:read` | `ORG_ADMIN`, `SOD_POLICY_ADMIN` |
 | `GET /workgroups/v1` | `snapshot` | `idn:workgroup:read` | `ORG_ADMIN` |
 | `GET /password-policies/v1` | `migration`, `snapshot` | `idn:password-policy:read` | not stated |
@@ -149,7 +153,7 @@ at the first refusal (HTTP 401 or 403), with nothing else deleted.
   each source, in pages of 250, then one search per 100 identities whose account ended, and one per
   100 of them that manage others. `sources` makes up to seven calls per source (provisioning
   policies, schedule, correlation, attribute synchronization, last aggregation and two account
-  counts), one with `--quick`. `role-impact` reads every identity matching `--query` (all
+  counts), one with `--quick`. `attribute` reads every identity matching `--query` (all by default), only the fields it needs, in pages of 250, and the provisioning policies and correlation of each source. `role-impact` reads every identity matching `--query` (all
   by default) with its access, in pages of 250, and every account of the sources its account
   criteria read.
   Narrow large tenants with each command's options (`--query`, `--max-identities`, `--campaign`,

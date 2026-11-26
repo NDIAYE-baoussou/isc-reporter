@@ -19,6 +19,7 @@ def test_demo_writes_every_report(tmp_path):
     assert {"transform-analysis/transform-analysis.xlsx",
             "transform-analysis/optimized/changes.csv"} <= written
     assert {"leavers.xlsx", "leavers.pdf", "leavers.csv"} <= written
+    assert {"attribute.xlsx", "attribute.pdf", "attribute.csv"} <= written
     assert {"externals.xlsx", "externals.pdf", "externals.csv", "externals.plan.json"} <= written
     assert {"role-impact.xlsx", "role-impact.pdf", "role-impact.csv"} <= written
     assert {"sources.xlsx", "sources.pdf", "sources.csv"} <= written
@@ -61,6 +62,22 @@ def test_demo_externals_shows_every_status_and_reason():
     assert any("Uncorrelated" in note for row in result.rows for note in row.notes)
     counts = [result.counts[s.id] for s in data.sources]
     assert sum(c["No end date"] for c in counts) and sum(c["End date to come"] for c in counts)
+
+
+def test_demo_attribute_report_finds_each_kind_of_problem():
+    import random
+
+    from isc_reporter import attribute_report, demo
+
+    data = demo.sample_attributes(random.Random(23), demo.identities(random.Random(7)))
+    result = attribute_report.analyse(data)
+    found = {(row["Attribute"], row["Check"]) for row in result.quality}
+    assert {("department", "Variants of the same value"), ("department", "Placeholder values"),
+            ("department", "Rare values"), ("department", "Empty although mapped"),
+            ("department", "Extra spaces"), ("department", "Not mapped in their profile"),
+            ("employeeNumber", "Duplicates"),
+            ("email", "Invalid e-mail addresses"), ("cloudLifecycleState", "Not a lifecycle state")} <= found
+    assert {row["Type"] for row in result.usages if row["Attribute"] == "department"} >= {"Role", "Segment"}
 
 
 def test_demo_role_impact_shows_every_outcome():

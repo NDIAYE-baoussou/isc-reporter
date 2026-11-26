@@ -48,6 +48,7 @@ have reviewed.
 | `changes` | Identity attribute changes **with old and new values** over a period (e.g. department and manager changes of the last 30 days), which ISC search cannot show. | xlsx, pdf, csv | Beta |
 | `sources` | Status and capabilities of every source: health and virtual appliance cluster, **how ISC provisions it** (its connector, a service desk integration or manual work items), features (provisioning, enable / disable, passwords, unlock...), provisioning policies, account correlation, attribute synchronization, aggregation schedule and last aggregation, accounts and uncorrelated accounts, with checks. | xlsx, pdf, csv | Experimental |
 | `mappings` | How every identity attribute is built, profile by profile: source, account attribute, transforms, a plain-language explanation, where else the attribute is used, and checks for likely mistakes; how the named transforms depend on each other, as trees and as an interactive map; what each lifecycle state provisions, source by source. | xlsx, pdf, interactive html | Beta |
+| `attribute` | A detailed report on one identity attribute or a list of them (`iscr attribute department endDate`): how each identity profile computes it (source, transforms, plain explanation, transform tree), **everything that uses it** (other mappings, transforms, provisioning policies, role and dimension criteria, segments, correlation, workflows), and **the quality of its values** over the identities: fill rate by profile, distinct values, variants of the same value, placeholders, rare values, duplicates, dates that cannot be read, invalid e-mail addresses, values that are not a lifecycle state. | xlsx, pdf, csv | Experimental |
 | `transforms` | Transform analysis: what is broken (missing or looping transforms), risky (lookup without default, identity attributes read in profile mappings), repeated (duplicates, same logic for other inputs, copies, blocks in several places), unused, too complex or recomputed every night for nothing, following SailPoint's transform guidance, with **optimized JSON drafts** of the changes that give the same result, and an **optimization plan for the whole tenant**: named transforms before and after, transform steps per identity profile. | xlsx, pdf, JSON drafts | Experimental |
 | `migration` | Impact of replacing a source (a new HR system, or any other), even when the new one is not chosen yet: everything that depends on it, with what to do for each object. Identity profiles, identity attributes, transforms and mappings before / after, roles, access profiles, SoD policies, lifecycle states, correlation, provisioning policies, segments, workflows, connector rules and password policies, with draft JSON once the new source is known. | xlsx, pdf, csv, JSON drafts | Beta |
 | `analyze-before-sync` | Forecast of the updates ISC could send to a target system if attribute synchronization is enabled on a source: values added, changed or cleared, per attribute and per account. | xlsx, pdf, csv | Experimental |
@@ -337,6 +338,39 @@ calls, what calls it, the attributes it reads and uses it, and its definition. F
 steps* and the *Attribute details* tab draw how one transform or one identity attribute computes
 its value, step by step down to the account attributes. Zoom, move, and save any diagram as an SVG
 image for a design document. `--format` chooses the files (`xlsx pdf html` by default).
+
+### Identity attribute report
+
+```bash
+isc-reporter attribute department                         # one attribute
+isc-reporter attribute department endDate email manager   # or several, by technical or display name
+isc-reporter attribute cloudLifecycleState --query "identityProfile.name:Contractors"
+```
+
+A detailed report on the identity attributes given, in three parts:
+
+- **Definition.** Its settings (type, multi-valued, searchable, standard or system) and, for each
+  identity profile, how it is computed: source and account attribute, transforms, a plain
+  explanation and the transform tree, with the points to check. Profiles that do not compute it are
+  listed too.
+- **Used by.** Everything that reads it: the mappings of other attributes, named transforms,
+  provisioning policies (it is written to that target system), role and dimension membership
+  criteria, segment visibility, account and manager correlation, and the workflows that name it.
+  Rule code cannot be read.
+- **Values.** Over the identities read (all, or those matching `--query`; `--max-identities` stops
+  early): how many have a value, by identity profile, the distinct values and how often (the
+  `--top` most frequent in the workbook, all of them in the CSV), and data quality checks:
+  - empty although the profile maps it, or not mapped in the identity's profile;
+  - extra spaces, and variants of the same value (case, accents, spaces);
+  - placeholders (N/A, null, unknown...) and rare values that may be typos;
+  - duplicates of an attribute that identifies people (uid, email, employee number, or any attribute
+    almost always unique);
+  - for dates: values that cannot be read, several formats, the date range;
+  - invalid e-mail addresses, and values that are not a lifecycle state of the identity's profile.
+
+Sheets: *Dashboard*, *Attributes*, *Mappings*, *Used by*, *Quality*, *Values*, *By profile*,
+*Duplicates* and *Settings*. The values come from the search index, which holds every attribute
+that has a value, searchable or not.
 
 ### Transform analysis and optimized drafts
 

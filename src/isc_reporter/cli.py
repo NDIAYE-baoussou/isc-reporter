@@ -434,6 +434,34 @@ def _externals(args) -> int:
     return 0
 
 
+def _attribute(args) -> int:
+    from isc_reporter import attribute_report as report
+
+    if args.top < 1:
+        raise UsageError("--top must be 1 or more")
+    isc = _connect(args)
+    data = report.fetch(isc, args.attributes, args.query, args.max_identities)
+    for note in data.notes:
+        log.warning("%s", note)
+    result = report.analyse(data, args.top)
+    base = _base(args, "attribute_" + re.sub(r"[^\w.-]+", "-", "_".join(data.names))[:60].strip("-"))
+    for fmt in dict.fromkeys(args.format):
+        path = base + "." + fmt
+        if fmt == "xlsx":
+            report.write_xlsx(path, result, args.title or "")
+        elif fmt == "pdf":
+            report.write_pdf(path, result, args.title or "", args.pdf_max_rows)
+        else:
+            report.write_csv(path, result)
+        log.info("%s: %s", fmt.upper(), path)
+    for row in result.summary:
+        log.info("%s: mapped in %s profile(s), used by %d object(s); %d of %d identit(ies) with a value "
+                 "(%.0f%%), %d distinct value(s), %d data quality warning(s)", row["Attribute"],
+                 row["Mapped in"], row["Used by"], row["Filled"], row["Identities"], 100 * row["Filled %"],
+                 row["Distinct values"], row["Warnings"])
+    return 0
+
+
 def _role_impact(args) -> int:
     from isc_reporter import role_impact
 
@@ -764,6 +792,22 @@ def build_parser() -> argparse.ArgumentParser:
                    help="keep for review the accounts whose deletion leaves something behind: enabled "
                         "accounts on other sources (left uncorrelated), owned objects, people managed, a "
                         "lifecycle state that is not a leaver state (by default they are warnings)")
+    p.add_argument("--title", help="report title")
+    p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
+    formats(p)
+    output(p)
+
+    p = command("attribute", _attribute,
+                "Detailed report on identity attributes: how each identity profile computes them, everything "
+                "that uses them (transforms, provisioning policies, roles, segments, correlation, workflows) "
+                "and the quality of their values. Changes nothing.", aliases=["attributes"])
+    p.add_argument("attributes", nargs="+", metavar="ATTRIBUTE",
+                   help="identity attributes, by technical or display name, e.g. department endDate")
+    p.add_argument("--query", "-q", default="*",
+                   help="only the identities matching this search query, for the values (default: all)")
+    p.add_argument("--max-identities", type=int, help="stop reading identities after this many")
+    p.add_argument("--top", type=int, default=25,
+                   help="values listed per attribute in the Values sheet (default 25; the CSV has them all)")
     p.add_argument("--title", help="report title")
     p.add_argument("--pdf-max-rows", type=int, default=500, help="rows per PDF table (default 500)")
     formats(p)

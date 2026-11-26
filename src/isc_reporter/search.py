@@ -13,12 +13,14 @@ PAGE_SIZE = 250
 
 def search_all(isc, index: str, query: str, *, sort_field: str | None = "created",
                descending: bool = True, include_nested: bool = True,
-               max_results: int | None = None, progress=None) -> list[dict]:
+               max_results: int | None = None, progress=None,
+               includes: list[str] | None = None) -> list[dict]:
     """Every document matching *query* (at most *max_results*).
 
     Pages with ``searchAfter`` (sorted on *sort_field* then ``id``, or on ``id`` alone when
     *sort_field* is None) rather than ``offset``, so result sets beyond the API's
     10,000-offset limit are complete. *progress* is called with the count after each page.
+    *includes* limits the documents to these fields (the sort fields are added).
     """
     from sailpoint.search.models import Search
 
@@ -26,6 +28,8 @@ def search_all(isc, index: str, query: str, *, sort_field: str | None = "created
     sort = [("-" if descending and sort_field else "") + fields[0]] + fields[1:]
     body = {"indices": [index], "query": {"query": query}, "sort": sort,
             "includeNested": include_nested}
+    if includes:
+        body["queryResultFilter"] = {"includes": list(dict.fromkeys([*includes, *fields]))}
     results: list[dict] = []
     while True:
         size = PAGE_SIZE if max_results is None else min(PAGE_SIZE, max_results - len(results))

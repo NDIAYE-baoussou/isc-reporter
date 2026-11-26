@@ -5,6 +5,13 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `attribute`: a detailed report on one identity attribute or a list of them. For each: its
+  definition (settings, and how each identity profile computes it, with the transform tree),
+  everything that uses it (other mappings, transforms, provisioning policies, role and dimension
+  criteria, segments, account and manager correlation, workflows), and the quality of its values
+  over the identities: fill rate by profile, distinct values, variants of the same value,
+  placeholders, rare values, duplicates of identifiers, dates that cannot be read, invalid e-mail
+  addresses, values that are not a lifecycle state.
 - Fixed: `externals` read no non-employee record when the records API did not know the first id it
   tried (HTTP 400 "Referenced sourceId was not found"), so every account of the source was to
   review. It now tries the non-employee source id and the ISC source id, with and without dashes,

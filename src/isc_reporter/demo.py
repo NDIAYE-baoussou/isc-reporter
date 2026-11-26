@@ -785,6 +785,49 @@ def sample_externals(rng: random.Random, people: list[dict], today):
                         Settings(90), today, origin="demo")
 
 
+def sample_attributes(rng: random.Random, people: list[dict]):
+    """The fictional identities' department, email, employee number and lifecycle state, with the
+    demo configuration, and a few of the mistakes the report finds: variants of the same department,
+    a placeholder, a typo, empty values, a duplicate employee number, an invalid e-mail address, and
+    contractors in a lifecycle state their profile does not have."""
+    from isc_reporter.attribute_report import AttributeData
+    from isc_reporter.identity_profiles import STANDARD_NAMES
+
+    profiles, transforms = sample_profiles()
+    names = sorted({m["identityAttributeName"] for p in profiles
+                    for m in p["identityAttributeConfig"]["attributeTransforms"]} | {"employeeNumber"})
+    definitions = {n: {"name": n, "displayName": STANDARD_NAMES.get(n) or n[0].upper() + n[1:],
+                       "type": "string", "searchable": n in ("department", "email", "employeeNumber"),
+                       "standard": n in STANDARD_NAMES}
+                   for n in names}
+    lifecycle = {pid: {s["technicalName"]: s for s in states}
+                 for pid, states in sample_lifecycle().states.items()}
+    docs = []
+    for n, person in enumerate(people):
+        doc = copy.deepcopy(person)
+        profile = person["identityProfile"]["name"]
+        doc["identityProfile"] = {"id": profile, "name": profile}
+        attributes = doc["attributes"]
+        draw = rng.random()
+        if n % 41 == 7 or profile == "Contractors":
+            attributes.pop("department", None)
+        elif draw < 0.05:
+            attributes["department"] = attributes["department"].lower()
+        elif draw < 0.08:
+            attributes["department"] += " "
+        attributes["department"] = {12: "N/A", 23: "Finnance"}.get(n, attributes.get("department"))
+        if attributes["department"] is None:
+            del attributes["department"]
+        if n in (30, 31):
+            attributes["employeeNumber"] = "E00030"
+        if n == 44:
+            doc["email"] = "jonas.martin44@example"
+        docs.append(doc)
+    return AttributeData(["department", "email", "employeeNumber", "cloudLifecycleState"], definitions,
+                         profiles, transforms, sample_policies(), sample_criteria(), docs, lifecycle,
+                         origin="demo")
+
+
 def sample_role_impact(rng: random.Random, people: list[dict]):
     """A disabled 'Finance Analyst' role for active Finance people or members of GRP-007, over the
     fictional identities: some already have it or its access, some lost the criteria, some requested
@@ -837,6 +880,7 @@ def run(folder: str) -> list[str]:
     """Write every sample report into *folder*; returns the files written."""
     from isc_reporter import (
         attribute_history,
+        attribute_report,
         certification_reports,
         externals,
         identity_profiles,
@@ -913,6 +957,11 @@ def run(folder: str) -> list[str]:
     base = os.path.join(folder, "leavers")
     out += [leavers.write_xlsx(base + ".xlsx", residual), leavers.write_pdf(base + ".pdf", residual),
             leavers.write_csv(base + ".csv", residual)]
+    detail = attribute_report.analyse(sample_attributes(random.Random(23), people))
+    base = os.path.join(folder, "attribute")
+    out.append(attribute_report.write_xlsx(base + ".xlsx", detail))
+    out.append(attribute_report.write_pdf(base + ".pdf", detail))
+    out.append(attribute_report.write_csv(base + ".csv", detail))
     ended = externals.analyse(sample_externals(random.Random(19), people, now.date()))
     base = os.path.join(folder, "externals")
     out += [externals.write_xlsx(base + ".xlsx", ended), externals.write_pdf(base + ".pdf", ended),
