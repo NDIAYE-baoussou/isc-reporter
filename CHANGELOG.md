@@ -5,6 +5,9 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Tested on Python 3.10 to 3.15. Every week, even without a change, the tests run with the
+  latest release of every dependency, and `pip-audit` checks them for known vulnerabilities.
+
 ## [0.7.0] - 2026-11-26
 
 - `attribute`: a detailed report on one identity attribute or a list of them. For each: its

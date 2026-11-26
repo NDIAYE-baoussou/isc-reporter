@@ -704,6 +704,11 @@ ruff check src tests
 Tests need no tenant: the SDK is replaced by recording fakes and the real SDK models are used to
 check what would be read.
 
+Continuous integration runs the tests on Windows, Linux and macOS with Python 3.10 to 3.15, on
+every change and every Monday with the latest release of every dependency, checks those
+dependencies for known vulnerabilities with `pip-audit`, and installs the built package.
+Dependabot proposes the updates of the GitHub Actions and of the dependency ranges.
+
 ## License
 
 [MIT](https://github.com/NDIAYE-baoussou/isc-reporter/blob/main/LICENSE)

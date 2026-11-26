@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Every Monday, even when nothing was pushed: the tests run with the latest release of every
+    # dependency, and pip-audit checks them for known vulnerabilities.
+    - cron: "17 5 * * 1"
 
 permissions:
   contents: read
@@ -17,32 +21,69 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.10", "3.13"]
+        python: ["3.10", "3.15"]          # the oldest and the newest supported
+        include:
+          - {os: ubuntu-latest, python: "3.12"}
+          - {os: ubuntu-latest, python: "3.13"}
+          - {os: ubuntu-latest, python: "3.14"}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
+      - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
+      - name: Versions tested
+        run: python -m pip list
       - run: ruff check src tests
       - run: pytest -q
       - name: Demo reports
         run: isc-reporter demo --log-dir ""
+
+  audit:
+    name: Known vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+      - run: python -m pip install --upgrade pip pip-audit
+      - run: python -m pip install ".[dev]"
+      - name: pip-audit (every installed package, against the PyPI advisory database)
+        run: pip-audit
 
   package:
     name: Build package
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - run: python -m pip install build
       - run: python -m build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
           retention-days: 30
+
+  install:
+    # The release workflow downloads the same artifact: this checks the package installs and runs.
+    name: Install the built package
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+      - run: python -m pip install dist/*.whl
+      - run: iscr --version && iscr-clean --version
+      - run: iscr demo --log-dir "" -o demo

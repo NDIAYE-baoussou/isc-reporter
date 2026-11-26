@@ -1,10 +1,20 @@
 version: 2
 updates:
+  # pyproject.toml gives minimum versions, so new releases install without a change here: Dependabot
+  # proposes an update when one falls outside a range (sailpoint 3...). The weekly CI run tests the
+  # latest versions in the meantime.
   - package-ecosystem: pip
     directory: "/"
     schedule:
-      interval: monthly
+      interval: weekly
+    groups:
+      python-packages:
+        patterns: ["*"]
+  # One pull request for all the GitHub Actions to update.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: monthly
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
