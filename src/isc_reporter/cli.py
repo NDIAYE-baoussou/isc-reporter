@@ -420,8 +420,13 @@ def _externals(args) -> int:
     delete, review = counts[externals.TO_DELETE], counts[externals.TO_REVIEW]
     log.info("%d account(s) ended at least %d day(s) ago: %d to delete, %d to review; %d left more recently",
              delete + review, args.days, delete, review, counts[externals.RECENT])
-    if not counts[externals.TO_DELETE]:
-        log.info("Nothing to delete: no plan written")
+    in_nerm = sum(row.status == externals.TO_DELETE and row.source.kind == externals.NERM
+                  for row in result.rows)
+    if in_nerm:
+        log.info("%d of the accounts to delete are on %s sources: delete or end their profiles in NERM (they "
+                 "are not in the iscr-clean plan)", in_nerm, externals.NERM)
+    if not delete - in_nerm:
+        log.info("Nothing for iscr-clean to delete: no plan written")
         return 0
     path = externals.write_plan(base + ".plan.json", result)
     log.info("Plan: %s. Review it, then check it again with: iscr-clean externals \"%s\" --env <name>  "
@@ -740,7 +745,7 @@ def build_parser() -> argparse.ArgumentParser:
                                          "uncorrelated, owned objects, people managed), and a plan of those "
                                          "to delete with iscr-clean. Changes nothing.")
     p.add_argument("--source", action="append", required=True, metavar="NAME",
-                   help="a non-employee or delimited file source (repeatable)")
+                   help="a non-employee, Non-Employee Risk Management or delimited file source (repeatable)")
     p.add_argument("--days", type=int, required=True,
                    help="only accounts whose end date is at least DAYS days past")
     p.add_argument("--account-attribute", metavar="ATTRIBUTE",

@@ -30,6 +30,8 @@ from isc_reporter.query import quote
 log = logging.getLogger("isc_reporter")
 
 NON_EMPLOYEE, DELIMITED, OTHER = "Non-employee", "Delimited file", "Other"
+NERM = "Non-Employee Risk Management"          # a separate product: its profiles are deleted there
+DELETABLE = (NON_EMPLOYEE, DELIMITED)          # the kinds iscr-clean deletes
 TO_DELETE, TO_REVIEW, RECENT = "To delete", "To review", "Left recently"
 STATUSES = (TO_REVIEW, TO_DELETE, RECENT)
 STATUS_COLOURS = {TO_DELETE: dashboard.RED, TO_REVIEW: dashboard.AMBER, RECENT: dashboard.BLUE}
@@ -192,11 +194,48 @@ class ExternalData:
     origin: str = ""
 
 
-def source_kind(source: dict, nelm_sources: dict[str, str]) -> str:
-    if source.get("id") in nelm_sources:
+def id_variants(value: str) -> list[str]:
+    """*value*, and the same id with or without the dashes of a UUID (8-4-4-4-12)."""
+    if not value:
+        return []
+    bare = value.replace("-", "")
+    found = [value, bare]
+    if re.fullmatch(r"[0-9a-fA-F]{32}", bare):
+        found.append(f"{bare[:8]}-{bare[8:12]}-{bare[12:16]}-{bare[16:20]}-{bare[20:]}")
+    return list(dict.fromkeys(found))
+
+
+def source_ids(info: SourceInfo) -> list[str]:
+    """The ids the non-employee API may know the source by: its non-employee source id, then its ISC
+    source id, each with and without dashes."""
+    return list(dict.fromkeys(v for i in (info.nelm_id, info.id) for v in id_variants(i)))
+
+
+def nelm_lookup(nelm_sources: list[dict]) -> dict[str, str]:
+    """Non-employee source id by ISC source id (without dashes, lower case) and by ``name:<name>``."""
+    found: dict[str, str] = {}
+    for item in nelm_sources:
+        if item.get("sourceId"):
+            found.setdefault(str(item["sourceId"]).replace("-", "").lower(), item.get("id", ""))
+        if item.get("name"):
+            found.setdefault("name:" + str(item["name"]).lower(), item.get("id", ""))
+    return found
+
+
+def nelm_id_of(source: dict, lookup: dict[str, str]) -> str:
+    return (lookup.get(str(source.get("id") or "").replace("-", "").lower())
+            or lookup.get("name:" + str(source.get("name") or "").lower(), ""))
+
+
+def source_kind(source: dict, nelm_id: str = "") -> str:
+    """NON_EMPLOYEE (Non-Employee Lifecycle Management, records in ISC), NERM (the separate Non-Employee
+    Risk Management product, aggregated by its connector), DELIMITED or OTHER."""
+    if nelm_id:
         return NON_EMPLOYEE
     text = " ".join(str(source.get(key) or "") for key in ("type", "connector", "connectorName"))
     text = re.sub(r"[\s_-]", "", text.lower())
+    if "riskmanagement" in text:
+        return NERM
     if "nonemployee" in text:
         return NON_EMPLOYEE
     return DELIMITED if "delimitedfile" in text else OTHER
@@ -258,9 +297,7 @@ def fetch(isc, names: list[str], settings: Settings, today: date | None = None) 
     notes: list[str] = []
     nelm: dict[str, str] = {}
     try:
-        for found in list_all(isc.non_employee.list_non_employee_sources_v1):
-            item = model_json(found)
-            nelm[item.get("sourceId", "")] = item.get("id", "")
+        nelm = nelm_lookup([model_json(s) for s in list_all(isc.non_employee.list_non_employee_sources_v1)])
     except Exception as exc:
         notes.append(f"Non-employee sources not read ({error_message(exc)}): their records cannot be "
                      "matched to the accounts.")
@@ -268,9 +305,9 @@ def fetch(isc, names: list[str], settings: Settings, today: date | None = None) 
     sources, accounts, records = [], {}, {}
     for name in dict.fromkeys(names):
         source = model_json(find_source(isc, name))
-        info = SourceInfo(source.get("id", ""), source.get("name", name), source_kind(source, nelm),
-                          nelm.get(source.get("id", ""), ""),
-                          {p.get("id", ""): p.get("name", "") for p in profiles
+        nelm_id = nelm_id_of(source, nelm)
+        info = SourceInfo(source.get("id", ""), source.get("name", name), source_kind(source, nelm_id),
+                          nelm_id, {p.get("id", ""): p.get("name", "") for p in profiles
                            if (p.get("authoritativeSource") or {}).get("id") == source.get("id")})
         sources.append(info)
         accounts[info.id] = [model_json(a) for a in list_all(isc.accounts.list_accounts_v1,
@@ -303,18 +340,28 @@ def fetch(isc, names: list[str], settings: Settings, today: date | None = None) 
 
 
 def _records(isc, info: SourceInfo, notes: list[str]) -> list[dict] | None:
-    """The non-employee records of the source, or None when they cannot be read."""
+    """The non-employee records of the source, or None when they cannot be read. Each id the API may
+    know the source by is tried (see :func:`source_ids`) until one returns records."""
     from isc_reporter.api import error_message, list_all, model_json
 
-    try:
-        for source_id in dict.fromkeys(i for i in (info.nelm_id, info.id) if i):
+    candidates, errors = source_ids(info), []
+    for source_id in candidates:
+        try:
             found = list_all(isc.non_employee.list_non_employee_records_v1,
                              filters=f"sourceId eq {quote(source_id)}")
-            if found:
-                return [model_json(r) for r in found]
-    except Exception as exc:
-        notes.append(f"Non-employee records of '{info.name}' not read ({error_message(exc)}): none of its "
-                     "accounts can be deleted. The token needs idn:nelm:read.")
+        except Exception as exc:
+            errors.append(exc)
+            if getattr(exc, "status", None) in (401, 403):
+                break                               # the same refusal for every id
+            continue
+        if found:
+            log.debug("Non-employee records of %s read with the source id %s", info.name, source_id)
+            return [model_json(r) for r in found]
+    denied = any(getattr(e, "status", None) in (401, 403) for e in errors)
+    if errors and (denied or len(errors) == len(candidates)):
+        notes.append(f"Non-employee records of '{info.name}' not read ({error_message(errors[-1])}, with "
+                     f"{len(errors)} source id(s) tried): none of its accounts can be deleted."
+                     + (" The token needs idn:nelm:read." if denied else ""))
         return None
     return []
 
@@ -506,6 +553,9 @@ def action(row: Row) -> str:
     if row.source.kind == NON_EMPLOYEE:
         text = "Delete the non-employee record: ISC deletes the account" + (
             " and the identity" if row.identity else "")
+    elif row.source.kind == NERM:
+        text = ("Delete or end the profile in Non-Employee Risk Management: ISC follows at the next "
+                "aggregation (not in the iscr-clean plan)")
     else:
         text = ("Remove the row from the file, and delete the account: otherwise the next aggregation "
                 "brings it back")
@@ -558,7 +608,7 @@ def plan(result: Result, created: datetime | None = None) -> dict:
     created = created or datetime.now(timezone.utc)
     deletions = []
     for row in result.rows:
-        if row.status != TO_DELETE:
+        if row.status != TO_DELETE or row.source.kind not in DELETABLE:
             continue
         shown = display(row)
         deletions.append({"source": row.source.name, "sourceId": row.source.id, "kind": row.source.kind,
@@ -607,6 +657,10 @@ def read_me(settings: Settings) -> list[tuple[str, str]]:
         (UNREADABLE, "The end date is not a date, or reads both as dd/MM/yyyy and MM/dd/yyyy: give "
                      "--date-format."),
         (UNSUPPORTED, "ISC deletes accounts by API only on delimited file and non-employee sources."),
+        (NERM, "Sources of the separate Non-Employee Risk Management product, read with their account "
+               "attribute endDate (or --account-attribute). Their accounts to delete are deleted in NERM: "
+               "delete or end the profile there, and ISC follows at the next aggregation. They are not in "
+               "the iscr-clean plan."),
         ("What is left behind", f"What deleting the account leaves behind is listed as {left}."),
         (OTHER_ENABLED, "The identity has enabled accounts on other sources. Once the identity is deleted "
                         f"they stay, uncorrelated, with their access: the {UNCORRELATED} sheet lists them, "
@@ -655,6 +709,9 @@ def settings_rows(result: Result) -> list[dict]:
             found = data.records.get(info.id)
             rows.append({"Setting": f"Non-employee records of {info.name}",
                          "Value": "not read" if found is None else str(len(found))})
+        elif info.kind == NERM:
+            rows.append({"Setting": f"{info.name}", "Value": f"{NERM} source: its accounts to delete are "
+                                                             "deleted in NERM, not by iscr-clean"})
     return rows + [{"Setting": "Note", "Value": note} for note in data.notes]
 
 

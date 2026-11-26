@@ -5,6 +5,16 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Fixed: `externals` read no non-employee record when the records API did not know the first id it
+  tried (HTTP 400 "Referenced sourceId was not found"), so every account of the source was to
+  review. It now tries the non-employee source id and the ISC source id, with and without dashes,
+  and finds the non-employee source by name when the ids do not match. The hint about
+  `idn:nelm:read` is given only when the token is refused (HTTP 401 or 403).
+- Fixed: `externals` took the sources of SailPoint Non-Employee Risk Management (NERM), a separate
+  product, for non-employee sources and looked for their records in vain. They are now analysed
+  with their account attribute `endDate` (or `--account-attribute`); their accounts to delete are
+  deleted in NERM (delete or end the profile), so they are not in the `iscr-clean` plan.
+
 ## [0.6.1] - 2026-11-19
 
 - `externals`: the end dates decide. An account is now *to delete* when its end date and its

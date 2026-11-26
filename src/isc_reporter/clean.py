@@ -164,7 +164,7 @@ def _download(func, **kwargs) -> bytes:
 def backup(isc, folder: str, keep: list) -> list[str]:
     """Save what is about to be deleted: the accounts, records and identities, and the export of each
     non-employee source involved. Raises when an export fails, before anything is deleted."""
-    from isc_reporter.externals import NON_EMPLOYEE
+    from isc_reporter.externals import NON_EMPLOYEE, source_ids
 
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, "before-deletion.json")
@@ -175,7 +175,7 @@ def backup(isc, folder: str, keep: list) -> list[str]:
     sources = {row.source.id: row.source for _, row in keep if row.source.kind == NON_EMPLOYEE}
     for info in sources.values():
         content, problem = None, ""
-        for source_id in dict.fromkeys(i for i in (info.nelm_id, info.id) if i):
+        for source_id in source_ids(info):
             try:
                 content = _download(isc.non_employee.export_non_employee_records_v1_without_preload_content,
                                     id=source_id)

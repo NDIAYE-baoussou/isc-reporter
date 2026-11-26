@@ -546,6 +546,10 @@ groups), the identities it manages, and a lifecycle state that is not a leaver s
 configured as inactive, or one of `--states`). With `--strict`, these are reasons to review
 instead.
 
+Sources of SailPoint Non-Employee Risk Management (NERM), a separate product, are analysed the same
+way, with their account attribute `endDate` (or `--account-attribute`). Their accounts to delete
+are deleted in NERM, by deleting or ending the profile there: they are not in the plan.
+
 Accounts that ended more recently are **left recently**, with the first day they can go. Sheets:
 *Dashboard*, *To delete*, *Left uncorrelated*, *To review*, *Left recently*, *By source* and
 *Settings*. The accounts to delete are also written to a plan, `<output>.plan.json`, with their

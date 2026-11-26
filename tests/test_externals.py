@@ -234,7 +234,7 @@ def fake_isc(records=True, identities=None):
 
     def records_of(limit, offset, filters):
         if not records:
-            raise RuntimeError("forbidden")
+            raise ApiError(403)
         return [r for r in RECORDS.get(NE, []) if f'"{r["sourceId"]}"' in filters] if not offset else []
 
     sources = {"Contractors": {"id": NE, "name": "Contractors", "type": "Non-Employee"},
@@ -289,6 +289,105 @@ def test_fetch_without_the_records():
     assert rows["hal"].status == TO_REVIEW
     assert rows["hal"].reasons == [(externals.NO_RECORD, "the non-employee records of this source could not "
                                                          "be read: see Settings")]
+
+
+class ApiError(Exception):
+    def __init__(self, status, text="refused"):
+        super().__init__(f"HTTP {status}")
+        self.status, self.body, self.reason = status, None, text
+
+
+def records_only_for(source_id, status=400):
+    """The records API of a tenant that knows the non-employee source by *source_id* only."""
+    def records_of(limit, offset, filters):
+        if f'"{source_id}"' not in filters:
+            raise ApiError(status, f"Referenced sourceId was not found ({filters})")
+        return [] if offset else RECORDS[NE]
+    return records_of
+
+
+def test_ids_with_or_without_dashes():
+    bare, dashed = "ac11000a84871b978184af0a47db0e4e", "ac11000a-8487-1b97-8184-af0a47db0e4e"
+    assert externals.id_variants(bare) == [bare, dashed]
+    assert externals.id_variants(dashed) == [dashed, bare]
+    assert externals.id_variants("not-a-uuid") == ["not-a-uuid", "notauuid"]
+    assert externals.id_variants("") == []
+    info = externals.SourceInfo(bare, "Contractors", externals.NON_EMPLOYEE, "x1")
+    assert externals.source_ids(info) == ["x1", bare, dashed]       # the non-employee source id first
+    lookup = externals.nelm_lookup([{"id": "x1", "sourceId": dashed, "name": "Contractors"}])
+    assert externals.nelm_id_of({"id": bare, "name": "Other"}, lookup) == "x1"       # same id, dashes aside
+    assert externals.nelm_id_of({"id": "zz", "name": "contractors"}, lookup) == "x1"    # by name
+    assert externals.nelm_id_of({"id": "zz", "name": "Interns"}, lookup) == ""
+
+
+def test_records_are_read_with_whichever_id_the_tenant_knows():
+    for known in (NELM, NE):                       # the non-employee source id, or the ISC source id
+        isc = fake_isc()
+        isc.non_employee.responses["list_non_employee_records_v1"] = records_only_for(known)
+        found = externals.fetch(isc, ["Contractors"], externals.Settings(90), TODAY)
+        assert len(found.records[NE]) == 8 and not any("not read" in note for note in found.notes)
+    isc = fake_isc()                               # listed by name only, with another id
+    listed = [{"id": NELM, "sourceId": "elsewhere", "name": "Contractors"}]
+    isc.non_employee.responses["list_non_employee_sources_v1"] = lambda limit, offset: (
+        [] if offset else listed)
+    isc.non_employee.responses["list_non_employee_records_v1"] = records_only_for(NELM)
+    found = externals.fetch(isc, ["Contractors"], externals.Settings(90), TODAY)
+    assert found.sources[0].nelm_id == NELM and len(found.records[NE]) == 8
+
+
+def test_records_that_cannot_be_read_say_why():
+    isc = fake_isc()
+    isc.non_employee.responses["list_non_employee_records_v1"] = records_only_for("unknown")
+    found = externals.fetch(isc, ["Contractors"], externals.Settings(90), TODAY)
+    note = next(n for n in found.notes if "not read" in n)
+    assert "3 source id(s) tried" in note and "idn:nelm:read" not in note        # not a permission problem
+    isc.non_employee.responses["list_non_employee_records_v1"] = records_only_for("unknown", status=403)
+    found = externals.fetch(isc, ["Contractors"], externals.Settings(90), TODAY)
+    assert "idn:nelm:read" in next(n for n in found.notes if "not read" in n)
+    assert len(isc.non_employee.called("list_non_employee_records_v1")) == 3 + 1  # stops at the refusal
+
+
+NERM_ID = "f" * 32
+NERM_SOURCE = {"id": NERM_ID, "name": "External form", "type": "39946170-edb9-46ac-b5f4-3c9bccef4cbb",
+               "connector": "39946170-edb9-46ac-b5f4-3c9bccef4cbb",
+               "connectorName": "SailPoint Non-Employee Risk Management"}
+ZOE = person("zoe", "nerm", "out", "2017-01-22", [elsewhere(AD, "AD", False, owner="zoe"),
+                                                  elsewhere("g" * 32, "ISC Governance", False, owner="zoe")])
+
+
+def test_nerm_sources_are_analysed_but_deleted_in_nerm():
+    assert externals.source_kind(NERM_SOURCE) == externals.NERM
+    assert externals.source_kind({"type": "Non-Employee"}) == externals.NON_EMPLOYEE
+    assert externals.source_kind({"type": "DelimitedFile"}) == externals.DELIMITED
+    info = externals.SourceInfo(NERM_ID, "External form", externals.NERM, "", {"nerm": "NERM"})
+    result = externals.analyse(data(
+        sources=[info], accounts={NERM_ID: [account("zoe", NERM_ID, "zoe", endDate="2017-01-22")]},
+        records={}, identities={"zoe": ZOE}, managed={},
+        lifecycle={"nerm": {"out": {"technicalName": "out", "identityState": "INACTIVE_LONG_TERM"}}}))
+    row = result.rows[0]                       # the row of the test on a real tenant
+    assert row.status == TO_DELETE and row.reasons == []
+    assert {label for label, _ in row.warnings} == {externals.OTHER_ENABLED}
+    assert "2 on AD, ISC Governance" in row.warnings[0][1]
+    assert "profile in Non-Employee Risk Management" in externals.display(row)["Action"]
+    assert externals.plan(result)["deletions"] == []                   # iscr-clean cannot delete it
+
+
+def test_cli_with_a_nerm_source(tmp_path, monkeypatch):
+    isc = fake_isc(identities={"zoe": ZOE})
+    isc.sources.responses["list_sources_v1"] = lambda filters, limit: [NERM_SOURCE]
+    isc.accounts.responses["list_accounts_v1"] = lambda limit, offset, filters: (
+        [] if offset else [account("zoe", NERM_ID, "zoe", endDate="2017-01-22")])
+    isc.identity_profiles.responses["list_identity_profiles_v1"] = lambda limit, offset: (
+        [] if offset else [{"id": "nerm", "name": "NERM", "authoritativeSource": {"id": NERM_ID}}])
+    isc.lifecycle_states.responses["get_lifecycle_states_v1"] = lambda identity_profile_id, limit, offset: (
+        [] if offset else [{"technicalName": "out", "identityState": "INACTIVE_LONG_TERM"}])
+    monkeypatch.setattr("isc_reporter.client.connect", lambda *args, **kwargs: isc)
+    out = tmp_path / "externals"
+    assert cli.main(["externals", "--source", "External form", "--days", "180", "--format", "csv",
+                     "-o", str(out), "--log-dir", ""]) == 0
+    assert not isc.non_employee.called("list_non_employee_records_v1")    # no record to look for
+    assert not (tmp_path / "externals.plan.json").exists()
+    assert "To delete;External form;zoe" in (tmp_path / "externals.csv").read_text(encoding="utf-8-sig")
 
 
 def test_missing_account_attribute_is_reported():
